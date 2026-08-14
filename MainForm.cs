@@ -14,6 +14,7 @@ internal sealed class MainForm : Form
     private ComboBox? modelSelector;
     private Label? keyStatusValue;
     private Label? footerStatus;
+    private Button? keyButton;
 
     public MainForm()
     {
@@ -261,8 +262,9 @@ internal sealed class MainForm : Form
         actions.RowStyles.Add(new RowStyle(SizeType.Absolute, 42F));
         actions.RowStyles.Add(new RowStyle(SizeType.Absolute, 42F));
 
-        var keyButton = MakeDisabledButton("設定 API Key");
+        keyButton = MakeButton("設定 API Key");
         keyButton.Margin = new Padding(0, 0, 6, 6);
+        keyButton.Click += ManageKeyClicked;
         var testButton = MakeDisabledButton("測試連線");
         testButton.Margin = new Padding(6, 0, 0, 6);
         var restoreButton = MakeDisabledButton("恢復原始設定");
@@ -429,6 +431,97 @@ internal sealed class MainForm : Form
         modelSelector.SelectedIndex = modelSelector.Items.Count > 0 ? 0 : -1;
         keyStatusValue.Text = provider.RequiresApiKey ? "尚未設定" : "使用 Codex 原登入";
         keyStatusValue.ForeColor = provider.RequiresApiKey ? Ink : Safe;
+        RefreshCredentialState(provider);
+    }
+
+    private void RefreshCredentialState(ProviderDefinition provider)
+    {
+        if (keyStatusValue is null || keyButton is null)
+        {
+            return;
+        }
+
+        keyButton.Enabled = provider.RequiresApiKey;
+        keyButton.TabStop = provider.RequiresApiKey;
+        if (!provider.RequiresApiKey)
+        {
+            keyButton.Text = "不需要設定金鑰";
+            keyStatusValue.Text = "使用 Codex 原登入";
+            keyStatusValue.ForeColor = Safe;
+            return;
+        }
+
+        try
+        {
+            var saved = CredentialVault.Exists(provider.Id);
+            keyButton.Text = saved ? "管理 API Key" : "設定 API Key";
+            keyStatusValue.Text = saved ? "已安全保存" : "尚未設定";
+            keyStatusValue.ForeColor = saved ? Safe : Ink;
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            keyButton.Text = "設定 API Key";
+            keyStatusValue.Text = "無法讀取狀態";
+            keyStatusValue.ForeColor = Color.Firebrick;
+        }
+    }
+
+    private void ManageKeyClicked(object? sender, EventArgs e)
+    {
+        if (providerSelector?.SelectedItem is not ProviderDefinition provider || !provider.RequiresApiKey)
+        {
+            return;
+        }
+
+        var alreadySaved = false;
+        try
+        {
+            alreadySaved = CredentialVault.Exists(provider.Id);
+        }
+        catch (System.ComponentModel.Win32Exception exception)
+        {
+            ShowSafeError(exception.Message);
+            return;
+        }
+
+        using var dialog = new ApiKeyDialog(provider.DisplayName, alreadySaved);
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+        {
+            return;
+        }
+
+        try
+        {
+            if (dialog.DeleteRequested)
+            {
+                CredentialVault.Delete(provider.Id);
+                footerStatus!.Text = $"已刪除 {provider.DisplayName} 的 API Key。";
+            }
+            else
+            {
+                CredentialVault.Save(provider.Id, dialog.ApiKey);
+                footerStatus!.Text = $"已將 {provider.DisplayName} 的 API Key 安全保存至 Windows 認證管理員。";
+            }
+
+            RefreshCredentialState(provider);
+        }
+        catch (Exception exception) when (exception is ArgumentException or System.ComponentModel.Win32Exception)
+        {
+            ShowSafeError(exception.Message);
+        }
+    }
+
+    private void ShowSafeError(string message)
+    {
+        MessageBox.Show(this, message, "無法管理 API Key", MessageBoxButtons.OK, MessageBoxIcon.Error);
+    }
+
+    private static Button MakeButton(string text)
+    {
+        var button = MakeDisabledButton(text);
+        button.Enabled = true;
+        button.TabStop = true;
+        return button;
     }
 
     private static Button MakeDisabledButton(string text, bool primary = false)
@@ -445,5 +538,105 @@ internal sealed class MainForm : Form
             UseVisualStyleBackColor = false,
             TabStop = false
         };
+    }
+}
+
+internal sealed class ApiKeyDialog : Form
+{
+    private readonly TextBox keyInput;
+
+    public ApiKeyDialog(string providerName, bool alreadySaved)
+    {
+        Text = $"{providerName} API Key";
+        StartPosition = FormStartPosition.CenterParent;
+        ClientSize = new Size(510, alreadySaved ? 245 : 205);
+        MinimumSize = new Size(510, ClientSize.Height);
+        MaximumSize = new Size(680, ClientSize.Height);
+        FormBorderStyle = FormBorderStyle.FixedDialog;
+        MaximizeBox = false;
+        MinimizeBox = false;
+        ShowInTaskbar = false;
+        Font = new Font("Segoe UI", 10F);
+
+        var layout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = alreadySaved ? 5 : 4,
+            Padding = new Padding(22),
+            BackColor = Color.White
+        };
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        if (alreadySaved)
+        {
+            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        }
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+
+        layout.Controls.Add(new Label
+        {
+            Text = alreadySaved
+                ? "已保存金鑰。如要更換，請輸入新金鑰；原金鑰不會顯示。"
+                : "請輸入 API Key。金鑰只會保存於 Windows 認證管理員。",
+            AutoSize = true,
+            ForeColor = Color.FromArgb(24, 34, 53)
+        });
+        keyInput = new TextBox
+        {
+            Dock = DockStyle.Top,
+            UseSystemPasswordChar = true,
+            Margin = new Padding(0, 12, 0, 12),
+            AccessibleName = "API Key"
+        };
+        layout.Controls.Add(keyInput);
+
+        var buttons = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            FlowDirection = FlowDirection.RightToLeft,
+            WrapContents = false
+        };
+        var saveButton = new Button { Text = alreadySaved ? "更換金鑰" : "安全保存", AutoSize = true };
+        saveButton.Click += (_, _) => SaveRequested();
+        var cancelButton = new Button { Text = "取消", AutoSize = true, DialogResult = DialogResult.Cancel };
+        buttons.Controls.Add(saveButton);
+        buttons.Controls.Add(cancelButton);
+        if (alreadySaved)
+        {
+            var deleteButton = new Button { Text = "刪除金鑰", AutoSize = true };
+            deleteButton.Click += (_, _) =>
+            {
+                if (MessageBox.Show(this, "確定要刪除已保存的 API Key 嗎？", "刪除 API Key", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes)
+                {
+                    DeleteRequested = true;
+                    DialogResult = DialogResult.OK;
+                }
+            };
+            buttons.Controls.Add(deleteButton);
+        }
+        layout.Controls.Add(buttons);
+
+        Controls.Add(layout);
+        CancelButton = cancelButton;
+        AcceptButton = saveButton;
+    }
+
+    public string ApiKey => keyInput.Text;
+
+    public bool DeleteRequested { get; private set; }
+
+    private void SaveRequested()
+    {
+        if (string.IsNullOrWhiteSpace(keyInput.Text))
+        {
+            MessageBox.Show(this, "請先輸入 API Key。", "尚未輸入", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            keyInput.Focus();
+            return;
+        }
+
+        DialogResult = DialogResult.OK;
     }
 }
