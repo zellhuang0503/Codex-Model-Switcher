@@ -15,6 +15,12 @@ internal sealed class MainForm : Form
     private Label? keyStatusValue;
     private Label? footerStatus;
     private Button? keyButton;
+    private Button? restoreButton;
+    private Button? switchButton;
+    private Label? currentSummary;
+    private Label? currentProviderValue;
+    private Label? currentModelValue;
+    private readonly CodexConfigManager configManager = CodexConfigManager.ForCurrentUser();
 
     public MainForm()
     {
@@ -32,6 +38,7 @@ internal sealed class MainForm : Form
         PerformAutoScale();
 
         LoadProviderOptions();
+        LoadCurrentConfig();
     }
 
     private Control BuildPage()
@@ -94,7 +101,7 @@ internal sealed class MainForm : Form
             Color.FromArgb(193, 202, 220)), 0, 1);
 
         var phaseBadge = MakeLabel(
-            "MVP · 介面骨架",
+            "MVP · 安全切換",
             9.5F,
             FontStyle.Bold,
             Color.White,
@@ -153,12 +160,13 @@ internal sealed class MainForm : Form
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
         layout.Controls.Add(MakeEyebrow("目前使用中"), 0, 0);
-        layout.Controls.Add(MakeLabel(
+        currentSummary = MakeLabel(
             "尚未讀取 Codex 設定",
             17F,
             FontStyle.Bold,
             Ink,
-            new Padding(0, 8, 0, 0)), 0, 1);
+            new Padding(0, 8, 0, 0));
+        layout.Controls.Add(currentSummary, 0, 1);
 
         var details = new TableLayoutPanel
         {
@@ -172,9 +180,11 @@ internal sealed class MainForm : Form
         details.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 76F));
         details.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
         details.Controls.Add(MakeDetailLabel("供應商"), 0, 0);
-        details.Controls.Add(MakeDetailValue("—"), 1, 0);
+        currentProviderValue = MakeDetailValue("—");
+        details.Controls.Add(currentProviderValue, 1, 0);
         details.Controls.Add(MakeDetailLabel("模型"), 0, 1);
-        details.Controls.Add(MakeDetailValue("—"), 1, 1);
+        currentModelValue = MakeDetailValue("—");
+        details.Controls.Add(currentModelValue, 1, 1);
         layout.Controls.Add(details, 0, 3);
 
         var safetyBox = new TableLayoutPanel
@@ -191,7 +201,7 @@ internal sealed class MainForm : Form
         safetyBox.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
         safetyBox.Controls.Add(MakeLabel("●", 10F, FontStyle.Regular, Safe, new Padding(0, 0, 8, 0)), 0, 0);
         safetyBox.Controls.Add(MakeLabel(
-            "安全模式\n這一階段不會讀取或修改 Codex 設定。",
+            "安全模式\n切換前先備份，且只修改模型相關設定。",
             9.5F,
             FontStyle.Regular,
             Color.FromArgb(29, 94, 70)), 1, 0);
@@ -229,6 +239,7 @@ internal sealed class MainForm : Form
         layout.Controls.Add(providerSelector, 0, 3);
         layout.Controls.Add(MakeFieldLabel("模型"), 0, 4);
         modelSelector = MakeSelector("模型");
+        modelSelector.SelectedIndexChanged += (_, _) => RefreshActionState();
         layout.Controls.Add(modelSelector, 0, 5);
 
         var keyStatus = new TableLayoutPanel
@@ -267,10 +278,12 @@ internal sealed class MainForm : Form
         keyButton.Click += ManageKeyClicked;
         var testButton = MakeDisabledButton("測試連線");
         testButton.Margin = new Padding(6, 0, 0, 6);
-        var restoreButton = MakeDisabledButton("恢復原始設定");
+        restoreButton = MakeButton("恢復原始設定");
         restoreButton.Margin = new Padding(0, 6, 6, 0);
-        var switchButton = MakeDisabledButton("切換並開啟 Codex", true);
+        restoreButton.Click += RestoreOriginalClicked;
+        switchButton = MakeButton("安全切換設定", true);
         switchButton.Margin = new Padding(6, 6, 0, 0);
+        switchButton.Click += SwitchConfigurationClicked;
 
         actions.Controls.Add(keyButton, 0, 0);
         actions.Controls.Add(testButton, 1, 0);
@@ -432,6 +445,7 @@ internal sealed class MainForm : Form
         keyStatusValue.Text = provider.RequiresApiKey ? "尚未設定" : "使用 Codex 原登入";
         keyStatusValue.ForeColor = provider.RequiresApiKey ? Ink : Safe;
         RefreshCredentialState(provider);
+        RefreshActionState();
     }
 
     private void RefreshCredentialState(ProviderDefinition provider)
@@ -504,6 +518,7 @@ internal sealed class MainForm : Form
             }
 
             RefreshCredentialState(provider);
+            RefreshActionState();
         }
         catch (Exception exception) when (exception is ArgumentException or System.ComponentModel.Win32Exception)
         {
@@ -516,9 +531,139 @@ internal sealed class MainForm : Form
         MessageBox.Show(this, message, "無法管理 API Key", MessageBoxButtons.OK, MessageBoxIcon.Error);
     }
 
-    private static Button MakeButton(string text)
+    private void LoadCurrentConfig()
     {
-        var button = MakeDisabledButton(text);
+        if (currentSummary is null || currentProviderValue is null || currentModelValue is null || footerStatus is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var current = configManager.ReadCurrent();
+            currentSummary.Text = current.ConfigExists ? "目前 Codex 模型設定" : "尚未找到 Codex 設定";
+            currentProviderValue.Text = current.ProviderDisplayName;
+            currentModelValue.Text = current.ModelDisplayName;
+            footerStatus.Text = current.Notice;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            currentSummary.Text = "無法安全讀取 Codex 設定";
+            currentProviderValue.Text = "—";
+            currentModelValue.Text = "—";
+            footerStatus.Text = exception.Message;
+        }
+
+        RefreshActionState();
+    }
+
+    private void RefreshActionState()
+    {
+        if (switchButton is null || restoreButton is null)
+        {
+            return;
+        }
+
+        var hasSelection = providerSelector?.SelectedItem is ProviderDefinition &&
+                           modelSelector?.SelectedItem is ModelDefinition;
+        var hasRequiredKey = true;
+        if (providerSelector?.SelectedItem is ProviderDefinition provider && provider.RequiresApiKey)
+        {
+            try
+            {
+                hasRequiredKey = CredentialVault.Exists(provider.Id);
+            }
+            catch (System.ComponentModel.Win32Exception)
+            {
+                hasRequiredKey = false;
+            }
+        }
+
+        switchButton.Enabled = hasSelection && hasRequiredKey && configManager.ConfigExists;
+        switchButton.TabStop = switchButton.Enabled;
+        restoreButton.Enabled = configManager.CanRestoreOriginal;
+        restoreButton.TabStop = restoreButton.Enabled;
+    }
+
+    private void SwitchConfigurationClicked(object? sender, EventArgs e)
+    {
+        if (providerSelector?.SelectedItem is not ProviderDefinition provider ||
+            modelSelector?.SelectedItem is not ModelDefinition model)
+        {
+            return;
+        }
+
+        if (CodexConfigManager.IsCodexRunning())
+        {
+            MessageBox.Show(
+                this,
+                "Codex 目前仍在執行。請先保存工作並自行關閉 Codex，再回來執行切換；程式不會強制關閉 Codex。",
+                "請先關閉 Codex",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+            return;
+        }
+
+        if (MessageBox.Show(
+                this,
+                $"即將把 Codex 模型設定切換為：\n\n供應商：{provider.DisplayName}\n模型：{model.DisplayName}\n\n切換前會自動備份。確定繼續嗎？",
+                "確認安全切換",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Question) != DialogResult.Yes)
+        {
+            return;
+        }
+
+        try
+        {
+            var executablePath = Environment.ProcessPath ?? Application.ExecutablePath;
+            var result = configManager.ApplySelection(provider, model, executablePath);
+            footerStatus!.Text = $"已安全切換為 {result.ProviderDisplayName}／{result.ModelDisplayName}。請重新開啟 Codex。";
+            LoadCurrentConfig();
+            MessageBox.Show(this, "設定已完成並重新驗證。現在可以重新開啟 Codex。", "切換完成", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException)
+        {
+            MessageBox.Show(this, exception.Message, "切換失敗，原設定已保留", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            LoadCurrentConfig();
+        }
+    }
+
+    private void RestoreOriginalClicked(object? sender, EventArgs e)
+    {
+        if (CodexConfigManager.IsCodexRunning())
+        {
+            MessageBox.Show(this, "請先保存工作並自行關閉 Codex，再執行恢復。", "請先關閉 Codex", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        var backupTime = configManager.OriginalBackupTime?.ToString("yyyy/MM/dd HH:mm") ?? "未知時間";
+        if (MessageBox.Show(
+                this,
+                $"將恢復首次切換前的原始 Codex 設定（備份時間：{backupTime}）。\n目前設定也會先備份。確定繼續嗎？",
+                "恢復原始設定",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning) != DialogResult.Yes)
+        {
+            return;
+        }
+
+        try
+        {
+            configManager.RestoreOriginal();
+            LoadCurrentConfig();
+            MessageBox.Show(this, "原始 Codex 設定已恢復並重新驗證。", "恢復完成", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            MessageBox.Show(this, exception.Message, "恢復失敗", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            LoadCurrentConfig();
+        }
+    }
+
+    private static Button MakeButton(string text, bool primary = false)
+    {
+        var button = MakeDisabledButton(text, primary);
         button.Enabled = true;
         button.TabStop = true;
         return button;
