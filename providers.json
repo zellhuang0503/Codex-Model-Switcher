@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "verifiedAt": "2026-08-14",
+  "providers": [
+    {
+      "id": "openai",
+      "displayName": "OpenAI（Codex 原生）",
+      "enabled": true,
+      "requiresApiKey": false,
+      "protocol": "responses",
+      "models": [
+        {
+          "id": "codex-native",
+          "displayName": "使用 Codex 原生模型選單",
+          "supportsImages": true,
+          "reasoningEfforts": []
+        }
+      ]
+    },
+    {
+      "id": "deepseek",
+      "displayName": "DeepSeek",
+      "enabled": true,
+      "baseUrl": "https://api.deepseek.com",
+      "requiresApiKey": true,
+      "protocol": "responses",
+      "models": [
+        {
+          "id": "deepseek-v4-flash",
+          "displayName": "DeepSeek V4 Flash",
+          "contextWindow": 1000000,
+          "supportsImages": false,
+          "reasoningEfforts": ["high", "xhigh"]
+        },
+        {
+          "id": "deepseek-v4-pro",
+          "displayName": "DeepSeek V4 Pro",
+          "contextWindow": 1000000,
+          "supportsImages": false,
+          "reasoningEfforts": ["high", "xhigh"]
+        }
+      ]
+    },
+    {
+      "id": "minimax",
+      "displayName": "MiniMax",
+      "enabled": false,
+      "baseUrl": "https://api.minimax.io",
+      "requiresApiKey": true,
+      "protocol": "chat_completions",
+      "unavailableReason": "MiniMax M3 尚未通過 Codex Responses API 相容性驗證",
+      "models": [
+        {
+          "id": "MiniMax-M3",
+          "displayName": "MiniMax M3",
+          "contextWindow": 1000000,
+          "supportsImages": true,
+          "reasoningEfforts": []
+        }
+      ]
+    }
+  ]
+}

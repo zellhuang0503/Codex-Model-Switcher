@@ -10,6 +10,11 @@ internal sealed class MainForm : Form
     private static readonly Color Muted = Color.FromArgb(91, 103, 122);
     private static readonly Color Safe = Color.FromArgb(23, 134, 90);
 
+    private ComboBox? providerSelector;
+    private ComboBox? modelSelector;
+    private Label? keyStatusValue;
+    private Label? footerStatus;
+
     public MainForm()
     {
         Text = "Codex 多模型切換器";
@@ -24,6 +29,8 @@ internal sealed class MainForm : Form
         AutoScaleDimensions = new SizeF(96F, 96F);
         AutoScaleMode = AutoScaleMode.Dpi;
         PerformAutoScale();
+
+        LoadProviderOptions();
     }
 
     private Control BuildPage()
@@ -216,9 +223,12 @@ internal sealed class MainForm : Form
 
         layout.Controls.Add(MakeEyebrow("準備切換"), 0, 0);
         layout.Controls.Add(MakeFieldLabel("供應商"), 0, 2);
-        layout.Controls.Add(MakeDisabledComboBox("將於下一階段提供供應商目錄"), 0, 3);
+        providerSelector = MakeSelector("供應商");
+        providerSelector.SelectedIndexChanged += ProviderSelectionChanged;
+        layout.Controls.Add(providerSelector, 0, 3);
         layout.Controls.Add(MakeFieldLabel("模型"), 0, 4);
-        layout.Controls.Add(MakeDisabledComboBox("請先選擇供應商"), 0, 5);
+        modelSelector = MakeSelector("模型");
+        layout.Controls.Add(modelSelector, 0, 5);
 
         var keyStatus = new TableLayoutPanel
         {
@@ -233,7 +243,8 @@ internal sealed class MainForm : Form
         keyStatus.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
         keyStatus.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         keyStatus.Controls.Add(MakeLabel("API Key 狀態", 9.5F, FontStyle.Regular, Muted), 0, 0);
-        keyStatus.Controls.Add(MakeLabel("尚未設定", 9.5F, FontStyle.Bold, Ink), 1, 0);
+        keyStatusValue = MakeLabel("尚未設定", 9.5F, FontStyle.Bold, Ink);
+        keyStatus.Controls.Add(keyStatusValue, 1, 0);
         layout.Controls.Add(keyStatus, 0, 6);
 
         var actions = new TableLayoutPanel
@@ -283,17 +294,17 @@ internal sealed class MainForm : Form
         footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
         footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
 
-        var message = MakeLabel(
+        footerStatus = MakeLabel(
             "所有切換功能尚未啟用，您目前的 Codex 不會受到影響。",
             9F,
             FontStyle.Regular,
             Muted);
-        message.Anchor = AnchorStyles.Left;
+        footerStatus.Anchor = AnchorStyles.Left;
 
         var version = MakeLabel("Windows 可攜版 MVP", 9F, FontStyle.Bold, Accent);
         version.Anchor = AnchorStyles.Right;
 
-        footer.Controls.Add(message, 0, 0);
+        footer.Controls.Add(footerStatus, 0, 0);
         footer.Controls.Add(version, 1, 0);
         return footer;
     }
@@ -352,20 +363,72 @@ internal sealed class MainForm : Form
         Ink,
         new Padding(0, 7, 0, 6));
 
-    private static ComboBox MakeDisabledComboBox(string placeholder)
+    private static ComboBox MakeSelector(string accessibleName)
     {
-        var comboBox = new ComboBox
+        return new ComboBox
         {
             Dock = DockStyle.Top,
             DropDownStyle = ComboBoxStyle.DropDownList,
-            Enabled = false,
+            Enabled = true,
             Height = 34,
             Margin = Padding.Empty,
-            IntegralHeight = false
+            IntegralHeight = false,
+            AccessibleName = accessibleName
         };
-        comboBox.Items.Add(placeholder);
-        comboBox.SelectedIndex = 0;
-        return comboBox;
+    }
+
+    private void LoadProviderOptions()
+    {
+        if (providerSelector is null || modelSelector is null || footerStatus is null)
+        {
+            return;
+        }
+
+        var result = ProviderCatalog.Load();
+        providerSelector.BeginUpdate();
+        try
+        {
+            providerSelector.Items.Clear();
+            foreach (var provider in result.Providers)
+            {
+                providerSelector.Items.Add(provider);
+            }
+        }
+        finally
+        {
+            providerSelector.EndUpdate();
+        }
+
+        footerStatus.Text = result.Notice;
+        providerSelector.SelectedIndex = providerSelector.Items.Count > 0 ? 0 : -1;
+    }
+
+    private void ProviderSelectionChanged(object? sender, EventArgs e)
+    {
+        if (providerSelector?.SelectedItem is not ProviderDefinition provider ||
+            modelSelector is null ||
+            keyStatusValue is null)
+        {
+            return;
+        }
+
+        modelSelector.BeginUpdate();
+        try
+        {
+            modelSelector.Items.Clear();
+            foreach (var model in provider.Models)
+            {
+                modelSelector.Items.Add(model);
+            }
+        }
+        finally
+        {
+            modelSelector.EndUpdate();
+        }
+
+        modelSelector.SelectedIndex = modelSelector.Items.Count > 0 ? 0 : -1;
+        keyStatusValue.Text = provider.RequiresApiKey ? "尚未設定" : "使用 Codex 原登入";
+        keyStatusValue.ForeColor = provider.RequiresApiKey ? Ink : Safe;
     }
 
     private static Button MakeDisabledButton(string text, bool primary = false)
