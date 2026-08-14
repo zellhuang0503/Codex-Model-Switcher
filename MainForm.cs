@@ -15,12 +15,16 @@ internal sealed class MainForm : Form
     private Label? keyStatusValue;
     private Label? footerStatus;
     private Button? keyButton;
+    private Button? testButton;
     private Button? restoreButton;
     private Button? switchButton;
     private Label? currentSummary;
     private Label? currentProviderValue;
     private Label? currentModelValue;
     private readonly CodexConfigManager configManager = CodexConfigManager.ForCurrentUser();
+    private readonly ConnectionTester connectionTester = new();
+    private readonly CancellationTokenSource connectionTestCancellation = new();
+    private bool connectionTestRunning;
 
     public MainForm()
     {
@@ -32,6 +36,12 @@ internal sealed class MainForm : Form
         Font = new Font("Segoe UI", 10F, FontStyle.Regular, GraphicsUnit.Point);
 
         Controls.Add(BuildPage());
+        FormClosing += (_, _) => connectionTestCancellation.Cancel();
+        FormClosed += (_, _) =>
+        {
+            connectionTester.Dispose();
+            connectionTestCancellation.Dispose();
+        };
 
         AutoScaleDimensions = new SizeF(96F, 96F);
         AutoScaleMode = AutoScaleMode.Dpi;
@@ -276,8 +286,9 @@ internal sealed class MainForm : Form
         keyButton = MakeButton("設定 API Key");
         keyButton.Margin = new Padding(0, 0, 6, 6);
         keyButton.Click += ManageKeyClicked;
-        var testButton = MakeDisabledButton("測試連線");
+        testButton = MakeButton("測試連線");
         testButton.Margin = new Padding(6, 0, 0, 6);
+        testButton.Click += TestConnectionClicked;
         restoreButton = MakeButton("恢復原始設定");
         restoreButton.Margin = new Padding(0, 6, 6, 0);
         restoreButton.Click += RestoreOriginalClicked;
@@ -559,7 +570,7 @@ internal sealed class MainForm : Form
 
     private void RefreshActionState()
     {
-        if (switchButton is null || restoreButton is null)
+        if (switchButton is null || restoreButton is null || testButton is null)
         {
             return;
         }
@@ -583,6 +594,80 @@ internal sealed class MainForm : Form
         switchButton.TabStop = switchButton.Enabled;
         restoreButton.Enabled = configManager.CanRestoreOriginal;
         restoreButton.TabStop = restoreButton.Enabled;
+        var canTest = providerSelector?.SelectedItem is ProviderDefinition selectedProvider &&
+                      selectedProvider.RequiresApiKey &&
+                      hasSelection &&
+                      hasRequiredKey &&
+                      !connectionTestRunning;
+        testButton.Enabled = canTest;
+        testButton.TabStop = canTest;
+    }
+
+    private async void TestConnectionClicked(object? sender, EventArgs e)
+    {
+        if (providerSelector?.SelectedItem is not ProviderDefinition provider ||
+            modelSelector?.SelectedItem is not ModelDefinition model ||
+            connectionTestRunning)
+        {
+            return;
+        }
+
+        if (MessageBox.Show(
+                this,
+                $"即將向 {provider.DisplayName} 送出一次最短測試：\n\n模型：{model.DisplayName}\n內容：固定測試文字，不含任何專案資料\n限制：最多 16 個輸出 token，不自動重試\n\n這次測試可能產生極少量 API 費用。確定繼續嗎？",
+                "確認付費連線測試",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning) != DialogResult.Yes)
+        {
+            return;
+        }
+
+        string apiKey;
+        try
+        {
+            apiKey = CredentialVault.Read(provider.Id);
+        }
+        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            ShowSafeError(exception.Message);
+            return;
+        }
+
+        connectionTestRunning = true;
+        testButton!.Text = "測試中…";
+        footerStatus!.Text = $"正在測試 {provider.DisplayName}／{model.DisplayName}，不會自動重試。";
+        RefreshActionState();
+        try
+        {
+            var result = await connectionTester.TestAsync(provider, model, apiKey, connectionTestCancellation.Token);
+            if (IsDisposed || Disposing)
+            {
+                return;
+            }
+            var usage = result.InputTokens is null && result.OutputTokens is null
+                ? string.Empty
+                : $"\n\n本次用量：輸入 {result.InputTokens?.ToString() ?? "未提供"} token；輸出 {result.OutputTokens?.ToString() ?? "未提供"} token。";
+            var message = $"{result.UserMessage}{usage}\n\n診斷摘要：{result.DiagnosticSummary}";
+            footerStatus.Text = result.Succeeded
+                ? $"{provider.DisplayName}／{model.DisplayName} 連線測試成功。"
+                : $"{provider.DisplayName}／{model.DisplayName} 連線測試未通過。";
+            MessageBox.Show(
+                this,
+                message,
+                result.Title,
+                MessageBoxButtons.OK,
+                result.Succeeded ? MessageBoxIcon.Information : MessageBoxIcon.Error);
+        }
+        finally
+        {
+            connectionTestRunning = false;
+            apiKey = string.Empty;
+            if (!IsDisposed && !Disposing)
+            {
+                testButton.Text = "測試連線";
+                RefreshActionState();
+            }
+        }
     }
 
     private void SwitchConfigurationClicked(object? sender, EventArgs e)
