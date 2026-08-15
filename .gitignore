@@ -1,0 +1,26 @@
+# .NET 編譯與發佈產物
+bin/
+obj/
+release/
+*.pdb
+
+# 本機開發設定
+*.user
+*.suo
+.vs/
+
+# 環境變數與憑證
+.env
+.env.*
+*.pfx
+*.p12
+*.pem
+*.key
+*.credential
+*.credentials
+credentials/
+
+# 作業系統暫存檔
+Thumbs.db
+Desktop.ini
+.DS_Store

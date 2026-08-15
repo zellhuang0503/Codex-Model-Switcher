@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Codex 多模型切換器｜Windows 可攜測試版使用說明</title>
+  <style>
+    :root { color-scheme: light; --ink:#182235; --muted:#59677a; --line:#d9e0eb; --blue:#3157d5; --safe:#17865a; --warn:#9a5a00; --canvas:#f3f6fb; }
+    * { box-sizing: border-box; }
+    body { margin:0; background:var(--canvas); color:var(--ink); font-family:"Segoe UI","Microsoft JhengHei",sans-serif; line-height:1.7; }
+    main { width:min(920px, calc(100% - 32px)); margin:32px auto; }
+    header, section { background:#fff; border:1px solid var(--line); border-radius:14px; padding:28px; margin-bottom:18px; }
+    header { border-top:6px solid var(--blue); }
+    h1 { margin:0 0 8px; font-size:clamp(28px, 5vw, 42px); line-height:1.2; }
+    h2 { margin:0 0 12px; font-size:22px; }
+    h3 { margin:20px 0 6px; font-size:17px; }
+    p, li { font-size:16px; }
+    .lead { color:var(--muted); margin:0; }
+    .badge { display:inline-block; margin-bottom:14px; padding:5px 10px; border-radius:999px; background:#e8edff; color:var(--blue); font-weight:700; }
+    .safe, .warning { border-left:5px solid; padding:14px 16px; margin:16px 0; background:#f8fafc; }
+    .safe { border-color:var(--safe); }
+    .warning { border-color:#d47a00; }
+    code { padding:2px 6px; border-radius:5px; background:#eef2f8; font-family:Consolas,monospace; }
+    table { width:100%; border-collapse:collapse; display:block; overflow-x:auto; }
+    th, td { border:1px solid var(--line); padding:10px 12px; text-align:left; vertical-align:top; }
+    th { background:#eef2f8; }
+    a { color:var(--blue); }
+    ol, ul { padding-left:24px; }
+    footer { color:var(--muted); text-align:center; padding:8px 0 24px; }
+    @media print { body { background:#fff; } main { width:100%; margin:0; } header, section { break-inside:avoid; border-radius:0; } a { color:inherit; text-decoration:none; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="badge">Windows 可攜測試版</div>
+    <h1>Codex 多模型切換器</h1>
+    <p class="lead">在同一個 Windows 視窗管理 Codex 的 OpenAI 與已驗證第三方模型設定，不需要建立一堆桌面捷徑。</p>
+  </header>
+
+  <section>
+    <h2>目前支援範圍</h2>
+    <ul>
+      <li><strong>OpenAI：</strong>沿用 Codex 原本的 ChatGPT／OpenAI 登入，不保存帳號密碼。</li>
+      <li><strong>DeepSeek：</strong>V4 Flash、V4 Pro，使用官方 Responses API。</li>
+      <li><strong>MiniMax M3：</strong>尚未完成 Codex Responses API 相容驗證，因此暫停選取。</li>
+    </ul>
+    <div class="warning"><strong>這是測試版，不是完整正式版。</strong> Gemini、Kimi、ZAI／GLM 國際版與 MiniMax 尚未開放切換；未驗證的模型不會為了湊數而啟用。</div>
+  </section>
+
+  <section>
+    <h2>第一次使用</h2>
+    <ol>
+      <li>將 ZIP 解壓縮到一般資料夾，不要直接在 ZIP 裡執行。</li>
+      <li>確認資料夾內只有 <code>CodexModelSwitcher.exe</code>、<code>providers.json</code>、<code>使用說明.html</code>。</li>
+      <li>雙擊 <code>CodexModelSwitcher.exe</code>。不需要系統管理員權限。</li>
+      <li>如果 Windows 顯示來源不明或安全警告，請先停止執行，向分享者核對 ZIP 來源與檔案雜湊；不要關閉 Windows 安全功能。</li>
+    </ol>
+    <div class="safe"><strong>可攜版不代表金鑰放在資料夾裡。</strong> DeepSeek API Key 只會存進目前 Windows 帳號的「認證管理員」，分享 ZIP 不會連同金鑰一起分享。</div>
+  </section>
+
+  <section>
+    <h2>設定 DeepSeek API Key</h2>
+    <ol>
+      <li>在「供應商」選擇 DeepSeek。</li>
+      <li>點「設定 API Key」，貼上自己的金鑰後選擇安全保存。</li>
+      <li>程式不會再次顯示已保存金鑰的完整內容。</li>
+      <li>需要更換或刪除時，點「管理 API Key」。</li>
+    </ol>
+    <p>金鑰申請與帳戶管理請使用 <a href="https://platform.deepseek.com/api_keys">DeepSeek 官方平台</a>。</p>
+  </section>
+
+  <section>
+    <h2>測試連線與費用</h2>
+    <ol>
+      <li>選擇 DeepSeek 與模型，並先保存 API Key。</li>
+      <li>點「測試連線」。程式會先顯示費用提醒，只有選擇「是」才會連線。</li>
+      <li>測試只送固定文字，不讀取專案內容；最多要求 16 個輸出 token，而且不自動重試。</li>
+      <li>測試仍可能依供應商價格產生極少量費用。結果若含 token 用量，程式會顯示數字。</li>
+    </ol>
+    <p>價格可能變動，請以 <a href="https://api-docs.deepseek.com/quick_start/pricing/">DeepSeek 官方計費頁</a>為準。</p>
+  </section>
+
+  <section>
+    <h2>安全切換模型</h2>
+    <ol>
+      <li>先在 Codex 保存正在進行的工作，然後由自己關閉 Codex。</li>
+      <li>回到切換器選擇供應商與模型。</li>
+      <li>點「安全切換設定」，確認畫面上的目標模型。</li>
+      <li>程式會先保存首次原始設定與近期備份，驗證暫存設定後才取代正式設定。</li>
+      <li>完成後重新開啟 Codex。</li>
+    </ol>
+    <p>切換器只管理模型、供應商與命令式驗證欄位，不應修改插件、MCP Server、權限、通知與專案信任設定。</p>
+  </section>
+
+  <section>
+    <h2>恢復原始設定</h2>
+    <ol>
+      <li>保存工作並自行關閉 Codex。</li>
+      <li>點「恢復原始設定」，核對首次備份時間。</li>
+      <li>確認後，程式會先備份目前設定，再恢復第一次切換前的原始檔。</li>
+      <li>重新開啟 Codex，確認原有模型、插件與 MCP Server。</li>
+    </ol>
+    <p>恢復設定不會刪除 Windows 認證管理員裡的 API Key；金鑰必須透過「管理 API Key」另外刪除。</p>
+  </section>
+
+  <section>
+    <h2>資料會送到哪裡</h2>
+    <ul>
+      <li>切換器本身不讀取、不保存、不上傳 Codex 專案內容，也沒有遙測或遠端日誌。</li>
+      <li>按「測試連線」只會把固定測試文字送到所選供應商。</li>
+      <li>切換後使用 Codex 工作時，Codex 為完成任務所需的提示與專案片段，會傳送給目前選擇的模型供應商。</li>
+      <li>不要將學生個資、客戶機密或未經授權資料傳給第三方模型。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>常見錯誤</h2>
+    <table>
+      <thead><tr><th>畫面訊息</th><th>代表意思</th><th>建議處理</th></tr></thead>
+      <tbody>
+        <tr><td>API Key 驗證失敗</td><td>金鑰錯誤或已失效</td><td>重新設定金鑰，不要把金鑰傳給他人。</td></tr>
+        <tr><td>API 餘額不足</td><td>供應商帳戶沒有可用額度</td><td>到官方平台確認，或切回 OpenAI。</td></tr>
+        <tr><td>模型或參數無法使用</td><td>模型可能更名、停用或介面改變</td><td>停止切換並等待更新供應商目錄。</td></tr>
+        <tr><td>目前受到限流</td><td>同時請求過多</td><td>稍後再試；程式不會自動重送。</td></tr>
+        <tr><td>請先關閉 Codex</td><td>為避免設定衝突而停止</td><td>保存工作後自行關閉 Codex，再重試。</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>分享前檢查</h2>
+    <ul>
+      <li>只分享原始 ZIP，不要加入自己的設定檔或畫面截圖。</li>
+      <li>ZIP 不應包含 <code>.env</code>、憑證、<code>bin</code>、<code>obj</code>、Git 資料或測試檔。</li>
+      <li>接收者必須使用自己的 API Key；分享者的 Windows 認證不會包含在 ZIP。</li>
+    </ul>
+  </section>
+
+  <footer>Codex 多模型切換器｜Windows 可攜測試版</footer>
+</main>
+</body>
+</html>
