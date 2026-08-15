@@ -18,7 +18,7 @@ internal sealed record ConfigSwitchResult(string ProviderDisplayName, string Mod
 internal sealed partial class CodexConfigManager
 {
     private const int MaximumConfigBytes = 5 * 1024 * 1024;
-    private const string ManagedProviderId = "codex-switcher-deepseek";
+    private const string ManagedProviderIdPrefix = "codex-switcher-";
     private const string MarkerPrefix = "# codex-model-switcher-saved-";
     private static readonly string[] ManagedRootKeys = ["model", "model_provider", "model_reasoning_effort"];
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
@@ -69,12 +69,11 @@ internal sealed partial class CodexConfigManager
         var document = ReadDocument(File.ReadAllBytes(configPath));
         var provider = document.GetRootValue("model_provider") ?? "openai";
         var model = document.GetRootValue("model") ?? string.Empty;
-        var providerDisplay = provider switch
-        {
-            "openai" => "OpenAI（Codex 原生）",
-            ManagedProviderId => "DeepSeek",
-            _ => provider
-        };
+        var providerDisplay = provider == "openai"
+            ? "OpenAI（Codex 原生）"
+            : IsManagedProviderId(provider)
+                ? document.GetTableValue($"model_providers.{provider}", "name") ?? provider
+                : provider;
         var modelDisplay = string.IsNullOrWhiteSpace(model) ? "使用 Codex 原生預設" : model;
         return new CurrentCodexModel(true, provider, providerDisplay, model, modelDisplay, "Codex 設定已安全讀取。");
     }
@@ -86,16 +85,16 @@ internal sealed partial class CodexConfigManager
     {
         ArgumentNullException.ThrowIfNull(provider);
         ArgumentNullException.ThrowIfNull(model);
-        if (provider.Id is not ("openai" or "deepseek"))
+        if (provider.Id != "openai")
         {
-            throw new InvalidOperationException("這個供應商尚未開放安全切換。");
+            ValidateManagedProvider(provider, model);
         }
 
         using var configLock = AcquireLock();
         var originalBytes = ReadRequiredConfig();
         var original = ReadDocument(originalBytes);
-        var transformed = provider.Id == "deepseek"
-            ? BuildDeepSeekConfig(original, provider, model, switcherExecutablePath)
+        var transformed = provider.Id != "openai"
+            ? BuildManagedConfig(original, provider, model, switcherExecutablePath)
             : BuildOpenAiConfig(original);
         var outputBytes = Encode(transformed.Text, original.HasUtf8Bom);
         ValidateExpectedSelection(outputBytes, provider, model);
@@ -146,24 +145,33 @@ internal sealed partial class CodexConfigManager
         return false;
     }
 
-    private ConfigDocument BuildDeepSeekConfig(
+    private static void ValidateManagedProvider(ProviderDefinition provider, ModelDefinition model)
+    {
+        if (provider.Id.Length > 48 ||
+            !ManagedSourceIdPattern().IsMatch(provider.Id) ||
+            !provider.RequiresApiKey ||
+            provider.Protocol != "responses" ||
+            provider.Models.All(candidate => candidate.Id != model.Id) ||
+            !Uri.TryCreate(provider.BaseUrl, UriKind.Absolute, out var baseUri) ||
+            baseUri.Scheme != Uri.UriSchemeHttps ||
+            !string.IsNullOrEmpty(baseUri.UserInfo))
+        {
+            throw new InvalidOperationException("這個供應商尚未開放安全切換。");
+        }
+    }
+
+    private ConfigDocument BuildManagedConfig(
         ConfigDocument document,
         ProviderDefinition provider,
         ModelDefinition model,
         string switcherExecutablePath)
     {
-        if (!provider.RequiresApiKey ||
-            !Uri.TryCreate(provider.BaseUrl, UriKind.Absolute, out var baseUri) ||
-            baseUri.Scheme != Uri.UriSchemeHttps)
-        {
-            throw new InvalidOperationException("DeepSeek 供應商資料不完整，已停止切換。");
-        }
-
+        var managedId = ToManagedProviderId(provider.Id);
         var lines = document.Lines.ToList();
         RemoveManagedTables(lines);
         var existingMarkers = ReadMarkers(lines);
         var currentProvider = document.GetRootValue("model_provider") ?? "openai";
-        var switchingFromManaged = currentProvider == ManagedProviderId;
+        var switchingFromManaged = IsManagedProviderId(currentProvider);
 
         if (existingMarkers.Count == 0 && !switchingFromManaged)
         {
@@ -185,30 +193,43 @@ internal sealed partial class CodexConfigManager
             rootLines.Add(BuildMarker(key, savedLine, document.NewLine));
         }
         rootLines.Add($"model = {Quote(model.Id)}{document.NewLine}");
-        rootLines.Add($"model_provider = {Quote(ManagedProviderId)}{document.NewLine}");
-        rootLines.Add($"model_reasoning_effort = \"high\"{document.NewLine}");
+        rootLines.Add($"model_provider = {Quote(managedId)}{document.NewLine}");
+        if (SelectReasoningEffort(model) is { } effort)
+        {
+            rootLines.Add($"model_reasoning_effort = {Quote(effort)}{document.NewLine}");
+        }
         InsertAtRootEnd(lines, rootLines, document.NewLine);
 
         EnsureTrailingNewLine(lines, document.NewLine);
         lines.Add(document.NewLine);
-        lines.Add($"[model_providers.{ManagedProviderId}]{document.NewLine}");
+        lines.Add($"[model_providers.{managedId}]{document.NewLine}");
         lines.Add($"name = {Quote(provider.DisplayName)}{document.NewLine}");
         lines.Add($"base_url = {Quote(provider.BaseUrl!)}{document.NewLine}");
         lines.Add($"wire_api = \"responses\"{document.NewLine}");
         lines.Add(document.NewLine);
-        lines.Add($"[model_providers.{ManagedProviderId}.auth]{document.NewLine}");
+        lines.Add($"[model_providers.{managedId}.auth]{document.NewLine}");
         lines.Add($"command = {Quote(Path.GetFullPath(switcherExecutablePath))}{document.NewLine}");
-        lines.Add($"args = [\"token\", \"deepseek\"]{document.NewLine}");
+        lines.Add($"args = [\"token\", {Quote(provider.Id)}]{document.NewLine}");
         lines.Add($"timeout_ms = 5000{document.NewLine}");
         lines.Add($"refresh_interval_ms = 0{document.NewLine}");
         return document with { Lines = lines };
+    }
+
+    private static string? SelectReasoningEffort(ModelDefinition model)
+    {
+        if (model.ReasoningEfforts.Count == 0)
+        {
+            return null;
+        }
+
+        return model.ReasoningEfforts.Contains("high") ? "high" : model.ReasoningEfforts[^1];
     }
 
     private ConfigDocument BuildOpenAiConfig(ConfigDocument document)
     {
         var currentProvider = document.GetRootValue("model_provider") ?? "openai";
         var markers = ReadMarkers(document.Lines);
-        if (currentProvider != ManagedProviderId && markers.Count == 0)
+        if (!IsManagedProviderId(currentProvider) && markers.Count == 0)
         {
             return document;
         }
@@ -234,19 +255,28 @@ internal sealed partial class CodexConfigManager
     {
         var document = ReadDocument(bytes);
         var providerId = document.GetRootValue("model_provider") ?? "openai";
-        if (provider.Id == "deepseek")
+        var managedTables = document.Lines
+            .Select(ParseTableName)
+            .OfType<string>()
+            .Where(IsManagedTableName)
+            .ToList();
+        if (provider.Id != "openai")
         {
-            if (providerId != ManagedProviderId ||
+            var managedId = ToManagedProviderId(provider.Id);
+            if (providerId != managedId ||
                 document.GetRootValue("model") != model.Id ||
-                document.GetRootValue("model_reasoning_effort") != "high" ||
-                !document.HasTable($"model_providers.{ManagedProviderId}") ||
-                !document.HasTable($"model_providers.{ManagedProviderId}.auth"))
+                document.GetRootValue("model_reasoning_effort") != SelectReasoningEffort(model) ||
+                !document.HasTable($"model_providers.{managedId}") ||
+                !document.HasTable($"model_providers.{managedId}.auth") ||
+                managedTables.Any(table =>
+                    table != $"model_providers.{managedId}" &&
+                    table != $"model_providers.{managedId}.auth"))
             {
                 throw new InvalidOperationException("暫存設定驗證失敗，原設定未變更。");
             }
         }
-        else if (providerId == ManagedProviderId ||
-                 document.HasTable($"model_providers.{ManagedProviderId}") ||
+        else if (IsManagedProviderId(providerId) ||
+                 managedTables.Count > 0 ||
                  document.Lines.Any(line => line.TrimStart().StartsWith(MarkerPrefix, StringComparison.Ordinal)))
         {
             throw new InvalidOperationException("OpenAI 原設定還原驗證失敗。");
@@ -447,8 +477,7 @@ internal sealed partial class CodexConfigManager
         while (index < lines.Count)
         {
             var table = ParseTableName(lines[index]);
-            if (table is null ||
-                (table != $"model_providers.{ManagedProviderId}" && table != $"model_providers.{ManagedProviderId}.auth"))
+            if (table is null || !IsManagedTableName(table))
             {
                 index++;
                 continue;
@@ -540,6 +569,14 @@ internal sealed partial class CodexConfigManager
         }
     }
 
+    private static string ToManagedProviderId(string providerId) => ManagedProviderIdPrefix + providerId;
+
+    private static bool IsManagedProviderId(string value) =>
+        value.StartsWith(ManagedProviderIdPrefix, StringComparison.Ordinal);
+
+    private static bool IsManagedTableName(string table) =>
+        table.StartsWith("model_providers." + ManagedProviderIdPrefix, StringComparison.Ordinal);
+
     private static string Quote(string value) => JsonSerializer.Serialize(value);
 
     private static byte[] Encode(string text, bool includeBom)
@@ -604,6 +641,25 @@ internal sealed partial class CodexConfigManager
         }
 
         public bool HasTable(string name) => Lines.Any(line => ParseTableName(line) == name);
+
+        public string? GetTableValue(string table, string key)
+        {
+            var index = 0;
+            while (index < Lines.Count && ParseTableName(Lines[index]) != table)
+            {
+                index++;
+            }
+
+            for (index++; index < Lines.Count && ParseTableName(Lines[index]) is null; index++)
+            {
+                if (IsAssignmentFor(Lines[index], key))
+                {
+                    return ParseTomlStringAssignment(TrimLineEnding(Lines[index]), key);
+                }
+            }
+
+            return null;
+        }
     }
 
     [GeneratedRegex(".*?(?:\\r\\n|\\n|\\r|$)", RegexOptions.Singleline | RegexOptions.CultureInvariant)]
@@ -611,4 +667,7 @@ internal sealed partial class CodexConfigManager
 
     [GeneratedRegex("^\\s*(?:\\[\\[([^\\[\\]]+)\\]\\]|\\[([^\\[\\]]+)\\])\\s*(?:#.*)?$", RegexOptions.CultureInvariant)]
     private static partial Regex TablePattern();
+
+    [GeneratedRegex("^[a-z0-9][a-z0-9-]*$", RegexOptions.CultureInvariant)]
+    private static partial Regex ManagedSourceIdPattern();
 }

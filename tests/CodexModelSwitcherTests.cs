@@ -100,20 +100,45 @@ internal static class TestProviders
             }
         ]
     };
+
+    public static ProviderDefinition MiniMax() => new()
+    {
+        Id = "minimax",
+        DisplayName = "MiniMax",
+        Enabled = true,
+        BaseUrl = "https://api.minimax.io",
+        RequiresApiKey = true,
+        Protocol = "responses",
+        Models =
+        [
+            new ModelDefinition
+            {
+                Id = "MiniMax-M3",
+                DisplayName = "MiniMax M3",
+                ContextWindow = 1_000_000,
+                SupportsImages = true,
+                ReasoningEfforts = []
+            }
+        ]
+    };
 }
 
 public sealed class ProviderCatalogTests
 {
     [Fact]
-    public void Load_RepositoryCatalog_ListsVerifiedProvidersAndMiniMaxNotice()
+    public void Load_RepositoryCatalog_ListsAllThreeVerifiedProviders()
     {
         var result = ProviderCatalog.Load();
 
-        Assert.Equal(2, result.Providers.Count);
+        Assert.Equal(3, result.Providers.Count);
         Assert.Contains(result.Providers, provider => provider.Id == "openai");
         var deepSeek = result.Providers.Single(provider => provider.Id == "deepseek");
         Assert.Equal(2, deepSeek.Models.Count);
-        Assert.Contains("MiniMax", result.Notice);
+        var miniMax = result.Providers.Single(provider => provider.Id == "minimax");
+        Assert.Equal("responses", miniMax.Protocol);
+        var miniMaxModel = Assert.Single(miniMax.Models);
+        Assert.Equal("MiniMax-M3", miniMaxModel.Id);
+        Assert.Contains("已載入 3 個可用供應商", result.Notice);
     }
 
     [Fact]
@@ -514,25 +539,103 @@ public sealed class CodexConfigManagerTests
     }
 
     [Fact]
-    public void ApplySelection_UnsupportedProvider_Throws()
+    public void ApplySelection_ProviderNotSafeForSwitching_Throws()
     {
         using var temp = new TempDirectory();
         var manager = CreateManager(temp.Root);
-        var miniMax = new ProviderDefinition
+        var before = File.ReadAllBytes(ConfigPath(temp));
+        var chatOnly = new ProviderDefinition
         {
-            Id = "minimax",
-            DisplayName = "MiniMax",
+            Id = "chat-only",
+            DisplayName = "Chat Only",
             Enabled = true,
-            BaseUrl = "https://api.minimax.io",
+            BaseUrl = "https://api.chat.example",
             RequiresApiKey = true,
-            Protocol = "responses",
-            Models = [new ModelDefinition { Id = "MiniMax-M3", DisplayName = "MiniMax M3" }]
+            Protocol = "chat_completions",
+            Models = [new ModelDefinition { Id = "chat-1", DisplayName = "Chat 1" }]
         };
+        var insecure = TestProviders.DeepSeek();
+        insecure.BaseUrl = "http://api.deepseek.com";
+        var foreignModel = new ModelDefinition { Id = "not-in-catalog", DisplayName = "目錄外模型" };
 
-        var exception = Assert.Throws<InvalidOperationException>(() =>
-            manager.ApplySelection(miniMax, miniMax.Models[0], FakeSwitcherPath(temp)));
+        var chatException = Assert.Throws<InvalidOperationException>(() =>
+            manager.ApplySelection(chatOnly, chatOnly.Models[0], FakeSwitcherPath(temp)));
+        var insecureException = Assert.Throws<InvalidOperationException>(() =>
+            manager.ApplySelection(insecure, insecure.Models[0], FakeSwitcherPath(temp)));
+        var foreignException = Assert.Throws<InvalidOperationException>(() =>
+            manager.ApplySelection(TestProviders.DeepSeek(), foreignModel, FakeSwitcherPath(temp)));
 
-        Assert.Contains("尚未開放", exception.Message);
+        Assert.Contains("尚未開放", chatException.Message);
+        Assert.Contains("尚未開放", insecureException.Message);
+        Assert.Contains("尚未開放", foreignException.Message);
+        Assert.Equal(before, File.ReadAllBytes(ConfigPath(temp)));
+    }
+
+    [Fact]
+    public void ApplySelection_ToMiniMax_WritesManagedConfigWithoutReasoningEffort()
+    {
+        using var temp = new TempDirectory();
+        var manager = CreateManager(temp.Root);
+
+        var result = manager.ApplySelection(TestProviders.MiniMax(), M3(), FakeSwitcherPath(temp));
+
+        Assert.Equal("MiniMax", result.ProviderDisplayName);
+        Assert.Equal("MiniMax M3", result.ModelDisplayName);
+        var text = File.ReadAllText(ConfigPath(temp));
+        Assert.Contains("model = \"MiniMax-M3\"", text);
+        Assert.Contains("model_provider = \"codex-switcher-minimax\"", text);
+        Assert.DoesNotContain("model_reasoning_effort =", text);
+        Assert.Contains(Marker("model_reasoning_effort", "model_reasoning_effort = \"medium\""), text);
+        Assert.Contains("[model_providers.codex-switcher-minimax]", text);
+        Assert.Contains("name = \"MiniMax\"", text);
+        Assert.Contains("base_url = \"https://api.minimax.io\"", text);
+        Assert.Contains("wire_api = \"responses\"", text);
+        Assert.Contains("[model_providers.codex-switcher-minimax.auth]", text);
+        Assert.Contains("args = [\"token\", \"minimax\"]", text);
+        Assert.Contains("[mcp_servers.docs]", text);
+    }
+
+    [Fact]
+    public void ApplySelection_DeepSeekToMiniMax_SwitchesDirectlyWithoutLosingOriginal()
+    {
+        using var temp = new TempDirectory();
+        var manager = CreateManager(temp.Root);
+        manager.ApplySelection(TestProviders.DeepSeek(), Flash(), FakeSwitcherPath(temp));
+
+        manager.ApplySelection(TestProviders.MiniMax(), M3(), FakeSwitcherPath(temp));
+
+        var text = File.ReadAllText(ConfigPath(temp));
+        Assert.Contains("model_provider = \"codex-switcher-minimax\"", text);
+        Assert.DoesNotContain("codex-switcher-deepseek", text);
+        Assert.Contains(Marker("model", "model = \"gpt-5-codex\""), text);
+
+        manager.ApplySelection(TestProviders.OpenAi(), TestProviders.OpenAi().Models[0], FakeSwitcherPath(temp));
+        var restored = File.ReadAllText(ConfigPath(temp));
+        Assert.Contains("model = \"gpt-5-codex\"", restored);
+        Assert.Contains("model_provider = \"openai\"", restored);
+        Assert.Contains("model_reasoning_effort = \"medium\"", restored);
+        Assert.DoesNotContain("codex-switcher-", restored);
+        Assert.DoesNotContain("# codex-model-switcher-saved-", restored);
+        Assert.Contains("[mcp_servers.docs]", restored);
+
+        var current = manager.ReadCurrent();
+        Assert.Equal("openai", current.ProviderId);
+        Assert.Equal("gpt-5-codex", current.ModelId);
+    }
+
+    [Fact]
+    public void ReadCurrent_AfterMiniMaxSwitch_ShowsDisplayNameFromConfig()
+    {
+        using var temp = new TempDirectory();
+        var manager = CreateManager(temp.Root);
+        manager.ApplySelection(TestProviders.MiniMax(), M3(), FakeSwitcherPath(temp));
+
+        var current = manager.ReadCurrent();
+
+        Assert.True(current.ConfigExists);
+        Assert.Equal("codex-switcher-minimax", current.ProviderId);
+        Assert.Equal("MiniMax", current.ProviderDisplayName);
+        Assert.Equal("MiniMax-M3", current.ModelId);
     }
 
     [Fact]
@@ -742,6 +845,8 @@ public sealed class CodexConfigManagerTests
     private static ModelDefinition Flash() => TestProviders.DeepSeek().Models[0];
 
     private static ModelDefinition Pro() => TestProviders.DeepSeek().Models[1];
+
+    private static ModelDefinition M3() => TestProviders.MiniMax().Models[0];
 
     private static string ConfigPath(TempDirectory temp) => Path.Combine(temp.Root, "config.toml");
 

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "verifiedAt": "2026-08-14",
+  "verifiedAt": "2026-08-15",
   "providers": [
     {
       "id": "openai",
@@ -44,11 +44,10 @@
     {
       "id": "minimax",
       "displayName": "MiniMax",
-      "enabled": false,
+      "enabled": true,
       "baseUrl": "https://api.minimax.io",
       "requiresApiKey": true,
-      "protocol": "chat_completions",
-      "unavailableReason": "MiniMax M3 尚未通過 Codex Responses API 相容性驗證",
+      "protocol": "responses",
       "models": [
         {
           "id": "MiniMax-M3",
