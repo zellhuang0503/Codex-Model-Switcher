@@ -45,7 +45,7 @@
       "id": "minimax",
       "displayName": "MiniMax",
       "enabled": true,
-      "baseUrl": "https://api.minimax.io",
+      "baseUrl": "https://api.minimax.io/v1",
       "requiresApiKey": true,
       "protocol": "responses",
       "models": [
@@ -54,6 +54,13 @@
           "displayName": "MiniMax M3",
           "contextWindow": 1000000,
           "supportsImages": true,
+          "reasoningEfforts": []
+        },
+        {
+          "id": "MiniMax-M2.7",
+          "displayName": "MiniMax M2.7",
+          "contextWindow": 204800,
+          "supportsImages": false,
           "reasoningEfforts": []
         }
       ]

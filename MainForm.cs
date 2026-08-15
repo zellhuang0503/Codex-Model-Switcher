@@ -779,9 +779,7 @@ internal sealed class ApiKeyDialog : Form
     {
         Text = $"{providerName} API Key";
         StartPosition = FormStartPosition.CenterParent;
-        ClientSize = new Size(510, alreadySaved ? 245 : 205);
-        MinimumSize = new Size(510, ClientSize.Height);
-        MaximumSize = new Size(680, ClientSize.Height);
+        ClientSize = new Size(510, alreadySaved ? 285 : 245);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;
@@ -811,6 +809,8 @@ internal sealed class ApiKeyDialog : Form
                 ? "已保存金鑰。如要更換，請輸入新金鑰；原金鑰不會顯示。"
                 : "請輸入 API Key。金鑰只會保存於 Windows 認證管理員。",
             AutoSize = true,
+            // 限制寬度讓長句自動換行，避免固定視窗把文字裁掉。
+            MaximumSize = new Size(466, 0),
             ForeColor = Color.FromArgb(24, 34, 53)
         });
         keyInput = new TextBox
@@ -852,6 +852,10 @@ internal sealed class ApiKeyDialog : Form
         Controls.Add(layout);
         CancelButton = cancelButton;
         AcceptButton = saveButton;
+
+        AutoScaleDimensions = new SizeF(96F, 96F);
+        AutoScaleMode = AutoScaleMode.Dpi;
+        PerformAutoScale();
     }
 
     public string ApiKey => keyInput.Text;
