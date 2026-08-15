@@ -1011,7 +1011,7 @@ public sealed class CodexConfigManagerTests
     }
 
     [Fact]
-    public void ApplySelection_ToManaged_WritesAuthModeAndModelCatalog()
+    public void ApplySelection_ToManaged_WritesAuthModeWithoutCatalogReference()
     {
         using var temp = new TempDirectory();
         var manager = CreateManager(temp.Root);
@@ -1019,32 +1019,25 @@ public sealed class CodexConfigManagerTests
         manager.ApplySelection(TestProviders.DeepSeek(), Flash(), FakeSwitcherPath(temp));
 
         var text = File.ReadAllText(ConfigPath(temp));
-        var catalogPath = Path.Combine(temp.Root, "models.json");
         Assert.Contains("preferred_auth_method = \"apikey\"", text);
         Assert.Contains("forced_login_method = \"api\"", text);
-        Assert.Contains($"model_catalog_json = {JsonSerializer.Serialize(catalogPath)}", text);
-        Assert.True(File.Exists(catalogPath));
-
-        using var catalog = JsonDocument.Parse(File.ReadAllText(catalogPath));
-        var models = catalog.RootElement.GetProperty("models");
-        Assert.Equal(2, models.GetArrayLength());
-        Assert.Equal("deepseek-v4-flash", models[0].GetProperty("slug").GetString());
-        Assert.Equal("deepseek-v4-pro", models[1].GetProperty("slug").GetString());
-        Assert.Equal("high", models[0].GetProperty("default_reasoning_level").GetString());
-        Assert.Equal("shell_command", models[0].GetProperty("shell_type").GetString());
+        Assert.DoesNotContain("model_catalog_json =", text);
+        Assert.Contains("# codex-model-switcher-saved-model_catalog_json: -", text);
+        Assert.False(File.Exists(Path.Combine(temp.Root, "models.json")));
     }
 
     [Fact]
-    public void ModelCatalog_BacksUpUserFileAndRestoresIt()
+    public void RestoreOriginal_PutsBackUserCatalogLeftBehindByOldVersions()
     {
         using var temp = new TempDirectory();
         var manager = CreateManager(temp.Root);
         var catalogPath = Path.Combine(temp.Root, "models.json");
-        File.WriteAllText(catalogPath, "{\"models\":[{\"slug\":\"user-own-model\"}]}");
-
+        var switcherDir = Path.Combine(temp.Root, "model-switcher");
+        Directory.CreateDirectory(switcherDir);
+        File.WriteAllText(catalogPath, "{\"models\":[{\"slug\":\"switcher-generated\"}]}");
+        File.WriteAllText(Path.Combine(switcherDir, "models-before-switcher.json"), "{\"models\":[{\"slug\":\"user-own-model\"}]}");
+        File.WriteAllText(Path.Combine(switcherDir, "models-owned-by-switcher.flag"), "flag");
         manager.ApplySelection(TestProviders.DeepSeek(), Flash(), FakeSwitcherPath(temp));
-        Assert.Contains("deepseek-v4-flash", File.ReadAllText(catalogPath));
-        Assert.True(File.Exists(Path.Combine(temp.Root, "model-switcher", "models-before-switcher.json")));
 
         manager.RestoreOriginal();
 
@@ -1052,13 +1045,16 @@ public sealed class CodexConfigManagerTests
     }
 
     [Fact]
-    public void ModelCatalog_RemovedOnRestoreWhenSwitcherCreatedIt()
+    public void RestoreOriginal_RemovesCatalogFileLeftBehindByOldVersions()
     {
         using var temp = new TempDirectory();
         var manager = CreateManager(temp.Root);
         var catalogPath = Path.Combine(temp.Root, "models.json");
+        var switcherDir = Path.Combine(temp.Root, "model-switcher");
+        Directory.CreateDirectory(switcherDir);
+        File.WriteAllText(catalogPath, "{\"models\":[{\"slug\":\"switcher-generated\"}]}");
+        File.WriteAllText(Path.Combine(switcherDir, "models-owned-by-switcher.flag"), "flag");
         manager.ApplySelection(TestProviders.DeepSeek(), Flash(), FakeSwitcherPath(temp));
-        Assert.True(File.Exists(catalogPath));
 
         manager.RestoreOriginal();
 
