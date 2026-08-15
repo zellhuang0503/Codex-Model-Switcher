@@ -796,6 +796,11 @@ internal sealed class MainForm : Form
             return;
         }
 
+        if (!ConfirmThirdPartyDataFlow(provider))
+        {
+            return;
+        }
+
         if (MessageBox.Show(
                 this,
                 $"即將把 Codex 模型設定切換為：\n\n供應商：{provider.DisplayName}\n模型：{model.DisplayName}\n\n切換前會自動備份。確定繼續嗎？",
@@ -819,6 +824,44 @@ internal sealed class MainForm : Form
             MessageBox.Show(this, exception.Message, "切換失敗，原設定已保留", MessageBoxButtons.OK, MessageBoxIcon.Error);
             LoadCurrentConfig();
         }
+    }
+
+    private bool ConfirmThirdPartyDataFlow(ProviderDefinition provider)
+    {
+        if (provider.Id == "openai")
+        {
+            return true;
+        }
+
+        var noticePath = Path.Combine(
+            Path.GetDirectoryName(configManager.CustomProvidersPath)!,
+            "data-flow-notice-accepted.txt");
+        if (File.Exists(noticePath))
+        {
+            return true;
+        }
+
+        if (MessageBox.Show(
+                this,
+                "第一次啟用第三方供應商前的提醒：\n\n切換之後，Codex 為了完成您交付的任務，會把您輸入的提示與相關專案內容片段，傳送給目前選擇的模型供應商處理。\n\n請不要讓第三方模型處理未經授權的個資或機密資料。切換器本身不會讀取或上傳您的專案內容。\n\n瞭解並同意後才會繼續切換。要繼續嗎？",
+                "資料流提醒",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Information) != DialogResult.Yes)
+        {
+            return false;
+        }
+
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(noticePath)!);
+            File.WriteAllText(noticePath, $"已於 {DateTime.Now:yyyy-MM-dd HH:mm} 顯示並同意資料流提醒。");
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // 記錄失敗只代表下次會再提醒一次，不影響本次切換。
+        }
+
+        return true;
     }
 
     private void RestoreOriginalClicked(object? sender, EventArgs e)
