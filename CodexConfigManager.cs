@@ -65,21 +65,6 @@ internal sealed partial class CodexConfigManager
 
     public string ModelCatalogPath => Path.Combine(codexHome, "models.json");
 
-    // 設定檔內寫入的值：預設 Codex 資料夾時採官方慣例的 ~ 寫法，
-    // 讓桌面版分別在 Windows 與 WSL 兩種執行環境都能各自解析；
-    // 自訂 CODEX_HOME 時退回絕對路徑。
-    private string ModelCatalogConfigValue
-    {
-        get
-        {
-            var defaultHome = Path.GetFullPath(
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codex"));
-            return string.Equals(Path.GetFullPath(codexHome), defaultHome, StringComparison.OrdinalIgnoreCase)
-                ? "~/.codex/models.json"
-                : ModelCatalogPath;
-        }
-    }
-
     private string ModelCatalogOwnedFlagPath => Path.Combine(codexHome, "model-switcher", "models-owned-by-switcher.flag");
 
     private string ModelCatalogUserBackupPath => Path.Combine(codexHome, "model-switcher", "models-before-switcher.json");
@@ -128,19 +113,6 @@ internal sealed partial class CodexConfigManager
         using var configLock = AcquireLock();
         var originalBytes = ReadRequiredConfig();
         var original = ReadDocument(originalBytes);
-        if (provider.Id != "openai")
-        {
-            if (File.Exists(ModelCatalogPath) && !File.Exists(ModelCatalogOwnedFlagPath))
-            {
-                Directory.CreateDirectory(Path.GetDirectoryName(ModelCatalogUserBackupPath)!);
-                File.Copy(ModelCatalogPath, ModelCatalogUserBackupPath, true);
-            }
-
-            CodexModelCatalog.Write(ModelCatalogPath, provider);
-            Directory.CreateDirectory(Path.GetDirectoryName(ModelCatalogOwnedFlagPath)!);
-            File.WriteAllText(ModelCatalogOwnedFlagPath, "models.json 由切換器產生與管理。");
-        }
-
         var transformed = provider.Id != "openai"
             ? BuildManagedConfig(original, provider, model, switcherExecutablePath)
             : BuildOpenAiConfig(original);
@@ -269,9 +241,12 @@ internal sealed partial class CodexConfigManager
         {
             rootLines.Add($"model_reasoning_effort = {Quote(effort)}{document.NewLine}");
         }
+        // 不寫入 model_catalog_json：桌面版由 Windows 與 WSL 元件混合組成，
+        // 任何路徑寫法都無法同時被兩側解析（絕對路徑與 ~ 皆實測失敗導致
+        // 「No such file or directory」）。省略目錄檔僅影響選單顯示名稱
+        // （顯示為「自訂」），請求路由與金鑰驗證不受影響。
         rootLines.Add($"preferred_auth_method = \"apikey\"{document.NewLine}");
         rootLines.Add($"forced_login_method = \"api\"{document.NewLine}");
-        rootLines.Add($"model_catalog_json = {Quote(ModelCatalogConfigValue)}{document.NewLine}");
         InsertAtRootEnd(lines, rootLines, document.NewLine);
 
         EnsureTrailingNewLine(lines, document.NewLine);
@@ -351,8 +326,7 @@ internal sealed partial class CodexConfigManager
                 document.GetRootValue("model_reasoning_effort") != SelectReasoningEffort(model) ||
                 document.GetRootValue("preferred_auth_method") != "apikey" ||
                 document.GetRootValue("forced_login_method") != "api" ||
-                document.GetRootValue("model_catalog_json") != ModelCatalogConfigValue ||
-                !File.Exists(ModelCatalogPath) ||
+                document.GetRootValue("model_catalog_json") is not null ||
                 !document.HasTable($"model_providers.{managedId}") ||
                 !document.HasTable($"model_providers.{managedId}.auth") ||
                 managedTables.Any(table =>
