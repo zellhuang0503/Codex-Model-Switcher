@@ -63,7 +63,26 @@ internal sealed partial class CodexConfigManager
 
     public string CustomProvidersPath => Path.Combine(codexHome, "model-switcher", "custom-providers.json");
 
-    public string ModelCatalogPath => Path.Combine(codexHome, "model-switcher", "models.json");
+    public string ModelCatalogPath => Path.Combine(codexHome, "models.json");
+
+    // 設定檔內寫入的值：預設 Codex 資料夾時採官方慣例的 ~ 寫法，
+    // 讓桌面版分別在 Windows 與 WSL 兩種執行環境都能各自解析；
+    // 自訂 CODEX_HOME 時退回絕對路徑。
+    private string ModelCatalogConfigValue
+    {
+        get
+        {
+            var defaultHome = Path.GetFullPath(
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codex"));
+            return string.Equals(Path.GetFullPath(codexHome), defaultHome, StringComparison.OrdinalIgnoreCase)
+                ? "~/.codex/models.json"
+                : ModelCatalogPath;
+        }
+    }
+
+    private string ModelCatalogOwnedFlagPath => Path.Combine(codexHome, "model-switcher", "models-owned-by-switcher.flag");
+
+    private string ModelCatalogUserBackupPath => Path.Combine(codexHome, "model-switcher", "models-before-switcher.json");
 
     public bool CanRestoreOriginal => backupManager.HasOriginalBackup;
 
@@ -111,7 +130,15 @@ internal sealed partial class CodexConfigManager
         var original = ReadDocument(originalBytes);
         if (provider.Id != "openai")
         {
+            if (File.Exists(ModelCatalogPath) && !File.Exists(ModelCatalogOwnedFlagPath))
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(ModelCatalogUserBackupPath)!);
+                File.Copy(ModelCatalogPath, ModelCatalogUserBackupPath, true);
+            }
+
             CodexModelCatalog.Write(ModelCatalogPath, provider);
+            Directory.CreateDirectory(Path.GetDirectoryName(ModelCatalogOwnedFlagPath)!);
+            File.WriteAllText(ModelCatalogOwnedFlagPath, "models.json 由切換器產生與管理。");
         }
 
         var transformed = provider.Id != "openai"
@@ -140,6 +167,21 @@ internal sealed partial class CodexConfigManager
         backupManager.SaveBeforeRestore(currentBytes);
         ReplaceConfigAtomically(originalBytes);
         _ = ReadDocument(File.ReadAllBytes(configPath));
+        RestoreModelCatalog();
+    }
+
+    private void RestoreModelCatalog()
+    {
+        if (File.Exists(ModelCatalogUserBackupPath))
+        {
+            File.Copy(ModelCatalogUserBackupPath, ModelCatalogPath, true);
+            TryDelete(ModelCatalogOwnedFlagPath);
+        }
+        else if (File.Exists(ModelCatalogOwnedFlagPath))
+        {
+            TryDelete(ModelCatalogPath);
+            TryDelete(ModelCatalogOwnedFlagPath);
+        }
     }
 
     public static bool IsCodexRunning()
@@ -229,7 +271,7 @@ internal sealed partial class CodexConfigManager
         }
         rootLines.Add($"preferred_auth_method = \"apikey\"{document.NewLine}");
         rootLines.Add($"forced_login_method = \"api\"{document.NewLine}");
-        rootLines.Add($"model_catalog_json = {Quote(ModelCatalogPath)}{document.NewLine}");
+        rootLines.Add($"model_catalog_json = {Quote(ModelCatalogConfigValue)}{document.NewLine}");
         InsertAtRootEnd(lines, rootLines, document.NewLine);
 
         EnsureTrailingNewLine(lines, document.NewLine);
@@ -309,7 +351,7 @@ internal sealed partial class CodexConfigManager
                 document.GetRootValue("model_reasoning_effort") != SelectReasoningEffort(model) ||
                 document.GetRootValue("preferred_auth_method") != "apikey" ||
                 document.GetRootValue("forced_login_method") != "api" ||
-                document.GetRootValue("model_catalog_json") != ModelCatalogPath ||
+                document.GetRootValue("model_catalog_json") != ModelCatalogConfigValue ||
                 !File.Exists(ModelCatalogPath) ||
                 !document.HasTable($"model_providers.{managedId}") ||
                 !document.HasTable($"model_providers.{managedId}.auth") ||

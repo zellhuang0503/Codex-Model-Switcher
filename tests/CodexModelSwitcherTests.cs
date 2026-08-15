@@ -1019,7 +1019,7 @@ public sealed class CodexConfigManagerTests
         manager.ApplySelection(TestProviders.DeepSeek(), Flash(), FakeSwitcherPath(temp));
 
         var text = File.ReadAllText(ConfigPath(temp));
-        var catalogPath = Path.Combine(temp.Root, "model-switcher", "models.json");
+        var catalogPath = Path.Combine(temp.Root, "models.json");
         Assert.Contains("preferred_auth_method = \"apikey\"", text);
         Assert.Contains("forced_login_method = \"api\"", text);
         Assert.Contains($"model_catalog_json = {JsonSerializer.Serialize(catalogPath)}", text);
@@ -1032,6 +1032,37 @@ public sealed class CodexConfigManagerTests
         Assert.Equal("deepseek-v4-pro", models[1].GetProperty("slug").GetString());
         Assert.Equal("high", models[0].GetProperty("default_reasoning_level").GetString());
         Assert.Equal("shell_command", models[0].GetProperty("shell_type").GetString());
+    }
+
+    [Fact]
+    public void ModelCatalog_BacksUpUserFileAndRestoresIt()
+    {
+        using var temp = new TempDirectory();
+        var manager = CreateManager(temp.Root);
+        var catalogPath = Path.Combine(temp.Root, "models.json");
+        File.WriteAllText(catalogPath, "{\"models\":[{\"slug\":\"user-own-model\"}]}");
+
+        manager.ApplySelection(TestProviders.DeepSeek(), Flash(), FakeSwitcherPath(temp));
+        Assert.Contains("deepseek-v4-flash", File.ReadAllText(catalogPath));
+        Assert.True(File.Exists(Path.Combine(temp.Root, "model-switcher", "models-before-switcher.json")));
+
+        manager.RestoreOriginal();
+
+        Assert.Contains("user-own-model", File.ReadAllText(catalogPath));
+    }
+
+    [Fact]
+    public void ModelCatalog_RemovedOnRestoreWhenSwitcherCreatedIt()
+    {
+        using var temp = new TempDirectory();
+        var manager = CreateManager(temp.Root);
+        var catalogPath = Path.Combine(temp.Root, "models.json");
+        manager.ApplySelection(TestProviders.DeepSeek(), Flash(), FakeSwitcherPath(temp));
+        Assert.True(File.Exists(catalogPath));
+
+        manager.RestoreOriginal();
+
+        Assert.False(File.Exists(catalogPath));
     }
 
     [Fact]
