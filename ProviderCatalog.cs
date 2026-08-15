@@ -233,7 +233,7 @@ internal static partial class ProviderCatalog
         }
     }
 
-    private static bool IsValidCustomProvider(ProviderDefinition provider)
+    internal static bool IsValidCustomProvider(ProviderDefinition provider)
     {
         return IsSafeId(provider.Id) &&
                IsCustomProviderId(provider.Id) &&
