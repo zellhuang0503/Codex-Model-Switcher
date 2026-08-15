@@ -42,9 +42,10 @@ MVP 功能開發已全部完成：
 - 連線測試（固定內容、極小 token 上限、不重試）與不含金鑰的診斷摘要
 - 自訂 Responses API 相容供應商：通過文字與工具呼叫雙驗證後才可啟用
 - 首次啟用第三方供應商前的一次性資料流提醒
-- 84 個自動測試（`dotnet test tests/CodexModelSwitcher.Tests.csproj`）
-- 可攜版打包指令碼（`build-portable.ps1`，含發佈內容白名單與金鑰掃描）
+- 桌面版 Codex（Windows 與 WSL 混合環境）相容：API 金鑰驗證模式切換、以 cmd.exe 包裝金鑰命令；切換後模型選單顯示「自訂」屬正常行為
+- 96 個自動測試（`dotnet test tests/CodexModelSwitcher.Tests.csproj`）
+- 可攜版打包指令碼（`build-portable.ps1`，支援 Windows PowerShell 5.1 與 PowerShell 7，含發佈內容白名單與金鑰掃描）
 
-DeepSeek 與 MiniMax M3 均已依官方 API 完成實測。剩餘工作為最終打包與乾淨 Windows 環境驗收。
+DeepSeek V4 Flash 已在桌面版 Codex 完成端到端實測（請求路由、金鑰取用、供應商用量核對、完整還原）；MiniMax M3 已完成官方 API 連線實測。剩餘工作為乾淨 Windows 環境的最終驗收。
 
 詳細設計請見 [MVP 設計文件](docs/superpowers/specs/2026-08-14-windows-portable-mvp-design.md)。
