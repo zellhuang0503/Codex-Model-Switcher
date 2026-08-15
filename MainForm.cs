@@ -18,6 +18,8 @@ internal sealed class MainForm : Form
     private Button? testButton;
     private Button? restoreButton;
     private Button? switchButton;
+    private Button? addCustomButton;
+    private Button? removeCustomButton;
     private Label? currentSummary;
     private Label? currentProviderValue;
     private Label? currentModelValue;
@@ -228,12 +230,13 @@ internal sealed class MainForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 9,
+            RowCount = 10,
             Padding = new Padding(28, 24, 28, 24),
             Margin = Padding.Empty
         };
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 18F));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -269,6 +272,24 @@ internal sealed class MainForm : Form
         keyStatus.Controls.Add(keyStatusValue, 1, 0);
         layout.Controls.Add(keyStatus, 0, 6);
 
+        var customRow = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            Margin = new Padding(0, 12, 0, 0),
+            Padding = Padding.Empty
+        };
+        addCustomButton = MakeCompactButton("新增自訂供應商…", Ink);
+        addCustomButton.Click += AddCustomProviderClicked;
+        removeCustomButton = MakeCompactButton("移除自訂供應商", Color.Firebrick);
+        removeCustomButton.Visible = false;
+        removeCustomButton.Click += RemoveCustomProviderClicked;
+        customRow.Controls.Add(addCustomButton);
+        customRow.Controls.Add(removeCustomButton);
+        layout.Controls.Add(customRow, 0, 7);
+
         var actions = new TableLayoutPanel
         {
             Dock = DockStyle.Bottom,
@@ -300,7 +321,7 @@ internal sealed class MainForm : Form
         actions.Controls.Add(testButton, 1, 0);
         actions.Controls.Add(restoreButton, 0, 1);
         actions.Controls.Add(switchButton, 1, 1);
-        layout.Controls.Add(actions, 0, 8);
+        layout.Controls.Add(actions, 0, 9);
 
         card.Controls.Add(layout);
         return card;
@@ -403,14 +424,14 @@ internal sealed class MainForm : Form
         };
     }
 
-    private void LoadProviderOptions()
+    private void LoadProviderOptions(string? preferredProviderId = null)
     {
         if (providerSelector is null || modelSelector is null || footerStatus is null)
         {
             return;
         }
 
-        var result = ProviderCatalog.Load();
+        var result = ProviderCatalog.Load(configManager.CustomProvidersPath);
         providerSelector.BeginUpdate();
         try
         {
@@ -426,7 +447,21 @@ internal sealed class MainForm : Form
         }
 
         footerStatus.Text = result.Notice;
-        providerSelector.SelectedIndex = providerSelector.Items.Count > 0 ? 0 : -1;
+        var targetIndex = providerSelector.Items.Count > 0 ? 0 : -1;
+        if (preferredProviderId is not null)
+        {
+            for (var index = 0; index < providerSelector.Items.Count; index++)
+            {
+                if (providerSelector.Items[index] is ProviderDefinition candidate &&
+                    candidate.Id == preferredProviderId)
+                {
+                    targetIndex = index;
+                    break;
+                }
+            }
+        }
+
+        providerSelector.SelectedIndex = targetIndex;
     }
 
     private void ProviderSelectionChanged(object? sender, EventArgs e)
@@ -455,8 +490,80 @@ internal sealed class MainForm : Form
         modelSelector.SelectedIndex = modelSelector.Items.Count > 0 ? 0 : -1;
         keyStatusValue.Text = provider.RequiresApiKey ? "尚未設定" : "使用 Codex 原登入";
         keyStatusValue.ForeColor = provider.RequiresApiKey ? Ink : Safe;
+        if (removeCustomButton is not null)
+        {
+            removeCustomButton.Visible = ProviderCatalog.IsCustomProviderId(provider.Id);
+        }
+
         RefreshCredentialState(provider);
         RefreshActionState();
+    }
+
+    private void AddCustomProviderClicked(object? sender, EventArgs e)
+    {
+        using var dialog = new CustomProviderDialog(
+            connectionTester,
+            configManager.CustomProvidersPath,
+            connectionTestCancellation.Token);
+        if (dialog.ShowDialog(this) != DialogResult.OK || dialog.SavedProvider is null)
+        {
+            return;
+        }
+
+        LoadProviderOptions(dialog.SavedProvider.Id);
+        footerStatus!.Text = $"已新增自訂供應商 {dialog.SavedProvider.DisplayName}，並通過文字與工具呼叫驗證。";
+    }
+
+    private void RemoveCustomProviderClicked(object? sender, EventArgs e)
+    {
+        if (providerSelector?.SelectedItem is not ProviderDefinition provider ||
+            !ProviderCatalog.IsCustomProviderId(provider.Id))
+        {
+            return;
+        }
+
+        if (MessageBox.Show(
+                this,
+                $"確定要移除自訂供應商 {provider.DisplayName} 嗎？",
+                "移除自訂供應商",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning) != DialogResult.Yes)
+        {
+            return;
+        }
+
+        try
+        {
+            ProviderCatalog.RemoveCustomProvider(configManager.CustomProvidersPath, provider.Id);
+            var keyDeleted = false;
+            try
+            {
+                if (CredentialVault.Exists(provider.Id) &&
+                    MessageBox.Show(
+                        this,
+                        "是否同時刪除已保存的 API Key？",
+                        "刪除 API Key",
+                        MessageBoxButtons.YesNo,
+                        MessageBoxIcon.Question) == DialogResult.Yes)
+                {
+                    CredentialVault.Delete(provider.Id);
+                    keyDeleted = true;
+                }
+            }
+            catch (System.ComponentModel.Win32Exception)
+            {
+                // 金鑰狀態無法讀取時仍完成供應商移除，金鑰可之後手動處理。
+            }
+
+            LoadProviderOptions();
+            footerStatus!.Text = keyDeleted
+                ? $"已移除自訂供應商 {provider.DisplayName} 與其 API Key。"
+                : $"已移除自訂供應商 {provider.DisplayName}。";
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or IOException or UnauthorizedAccessException)
+        {
+            MessageBox.Show(this, exception.Message, "移除失敗", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
     }
 
     private void RefreshCredentialState(ProviderDefinition provider)
@@ -754,6 +861,22 @@ internal sealed class MainForm : Form
         return button;
     }
 
+    private static Button MakeCompactButton(string text, Color foreColor)
+    {
+        return new Button
+        {
+            Text = text,
+            AutoSize = true,
+            FlatStyle = FlatStyle.Flat,
+            BackColor = Color.White,
+            ForeColor = foreColor,
+            Font = new Font("Segoe UI", 9F, FontStyle.Bold, GraphicsUnit.Point),
+            UseVisualStyleBackColor = false,
+            Margin = new Padding(0, 0, 8, 0),
+            Padding = new Padding(8, 2, 8, 2)
+        };
+    }
+
     private static Button MakeDisabledButton(string text, bool primary = false)
     {
         return new Button
@@ -872,5 +995,320 @@ internal sealed class ApiKeyDialog : Form
         }
 
         DialogResult = DialogResult.OK;
+    }
+}
+
+internal sealed class CustomProviderDialog : Form
+{
+    private static readonly Color Ink = Color.FromArgb(24, 34, 53);
+    private static readonly Color Muted = Color.FromArgb(91, 103, 122);
+
+    private readonly ConnectionTester connectionTester;
+    private readonly string customProvidersPath;
+    private readonly CancellationToken cancellationToken;
+    private readonly TextBox nameInput;
+    private readonly TextBox baseUrlInput;
+    private readonly TextBox modelIdInput;
+    private readonly TextBox apiKeyInput;
+    private readonly NumericUpDown contextInput;
+    private readonly CheckBox imagesInput;
+    private readonly CheckedListBox effortInput;
+    private readonly Label statusLabel;
+    private readonly Button verifyButton;
+    private readonly Button cancelButton;
+    private bool verifying;
+
+    public CustomProviderDialog(
+        ConnectionTester connectionTester,
+        string customProvidersPath,
+        CancellationToken cancellationToken)
+    {
+        this.connectionTester = connectionTester;
+        this.customProvidersPath = customProvidersPath;
+        this.cancellationToken = cancellationToken;
+
+        Text = "新增自訂供應商";
+        StartPosition = FormStartPosition.CenterParent;
+        ClientSize = new Size(560, 566);
+        FormBorderStyle = FormBorderStyle.FixedDialog;
+        MaximizeBox = false;
+        MinimizeBox = false;
+        ShowInTaskbar = false;
+        Font = new Font("Segoe UI", 10F);
+        BackColor = Color.White;
+        FormClosing += (_, e) => e.Cancel = verifying;
+
+        nameInput = new TextBox { Dock = DockStyle.Fill, AccessibleName = "顯示名稱" };
+        baseUrlInput = new TextBox
+        {
+            Dock = DockStyle.Fill,
+            PlaceholderText = "https://api.example.com/v1",
+            AccessibleName = "Base URL"
+        };
+        modelIdInput = new TextBox { Dock = DockStyle.Fill, AccessibleName = "模型 ID" };
+        apiKeyInput = new TextBox
+        {
+            Dock = DockStyle.Fill,
+            UseSystemPasswordChar = true,
+            AccessibleName = "API Key"
+        };
+        contextInput = new NumericUpDown
+        {
+            Dock = DockStyle.Fill,
+            Minimum = 1_000,
+            Maximum = 100_000_000,
+            Increment = 1_000,
+            Value = 200_000,
+            ThousandsSeparator = true,
+            AccessibleName = "上下文長度"
+        };
+        imagesInput = new CheckBox
+        {
+            Text = "支援圖片輸入",
+            AutoSize = true,
+            Margin = new Padding(0, 8, 0, 0)
+        };
+        effortInput = new CheckedListBox
+        {
+            Dock = DockStyle.Fill,
+            CheckOnClick = true,
+            IntegralHeight = false,
+            Height = 100,
+            AccessibleName = "可用推理等級"
+        };
+        effortInput.Items.AddRange(["minimal", "low", "medium", "high", "xhigh"]);
+
+        var layout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 2,
+            RowCount = 10,
+            Padding = new Padding(22)
+        };
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 112F));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+        for (var row = 0; row < 10; row++)
+        {
+            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        }
+
+        var intro = new Label
+        {
+            Text = "只支援明確標示為 OpenAI Responses API 相容的供應商。按「驗證並加入」會以此金鑰送出兩次極小測試（文字回應與工具呼叫），任一測試失敗都不會保存。",
+            AutoSize = true,
+            MaximumSize = new Size(494, 0),
+            ForeColor = Muted,
+            Margin = new Padding(0, 0, 0, 12)
+        };
+        layout.Controls.Add(intro, 0, 0);
+        layout.SetColumnSpan(intro, 2);
+
+        AddField(layout, 1, "顯示名稱", nameInput);
+        AddField(layout, 2, "Base URL", baseUrlInput);
+        AddField(layout, 3, "模型 ID", modelIdInput);
+        AddField(layout, 4, "API Key", apiKeyInput);
+        AddField(layout, 5, "上下文長度", contextInput);
+        layout.Controls.Add(imagesInput, 1, 6);
+        AddField(layout, 7, "推理等級", effortInput);
+
+        statusLabel = new Label
+        {
+            Text = "尚未開始驗證。",
+            AutoSize = true,
+            MaximumSize = new Size(494, 0),
+            ForeColor = Muted,
+            Margin = new Padding(0, 14, 0, 0)
+        };
+        layout.Controls.Add(statusLabel, 0, 8);
+        layout.SetColumnSpan(statusLabel, 2);
+
+        var buttons = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            FlowDirection = FlowDirection.RightToLeft,
+            WrapContents = false,
+            Margin = new Padding(0, 14, 0, 0)
+        };
+        verifyButton = new Button { Text = "驗證並加入", AutoSize = true };
+        verifyButton.Click += VerifyClicked;
+        cancelButton = new Button { Text = "取消", AutoSize = true, DialogResult = DialogResult.Cancel };
+        buttons.Controls.Add(verifyButton);
+        buttons.Controls.Add(cancelButton);
+        layout.Controls.Add(buttons, 0, 9);
+        layout.SetColumnSpan(buttons, 2);
+
+        Controls.Add(layout);
+        CancelButton = cancelButton;
+        AcceptButton = verifyButton;
+
+        AutoScaleDimensions = new SizeF(96F, 96F);
+        AutoScaleMode = AutoScaleMode.Dpi;
+        PerformAutoScale();
+    }
+
+    public ProviderDefinition? SavedProvider { get; private set; }
+
+    private static void AddField(TableLayoutPanel layout, int row, string title, Control control)
+    {
+        layout.Controls.Add(new Label
+        {
+            Text = title,
+            AutoSize = true,
+            Font = new Font("Segoe UI", 9.5F, FontStyle.Bold),
+            ForeColor = Ink,
+            Margin = new Padding(0, 10, 8, 0),
+            Anchor = AnchorStyles.Left | AnchorStyles.Top
+        }, 0, row);
+        control.Margin = new Padding(0, 6, 0, 0);
+        layout.Controls.Add(control, 1, row);
+    }
+
+    private async void VerifyClicked(object? sender, EventArgs e)
+    {
+        if (verifying)
+        {
+            return;
+        }
+
+        var apiKey = apiKeyInput.Text.Trim();
+        var provider = BuildProvider();
+        if (provider is null || string.IsNullOrWhiteSpace(apiKey))
+        {
+            MessageBox.Show(
+                this,
+                "請確認顯示名稱、Base URL（必須是 https 開頭的完整網址）、模型 ID 與 API Key 均已正確填寫。",
+                "資料不完整",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+            return;
+        }
+
+        if (MessageBox.Show(
+                this,
+                $"即將向 {provider.DisplayName} 送出兩次極小測試（文字回應＋工具呼叫），可能產生極少量 API 費用。確定繼續嗎？",
+                "確認驗證",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning) != DialogResult.Yes)
+        {
+            return;
+        }
+
+        verifying = true;
+        SetBusy(true);
+        try
+        {
+            statusLabel.Text = "正在執行文字回應測試…";
+            var textResult = await connectionTester.TestAsync(provider, provider.Models[0], apiKey, cancellationToken);
+            if (IsDisposed)
+            {
+                return;
+            }
+
+            if (!textResult.Succeeded)
+            {
+                ShowFailure("文字回應測試未通過", textResult);
+                return;
+            }
+
+            statusLabel.Text = "正在執行工具呼叫測試…";
+            var toolResult = await connectionTester.TestToolCallAsync(provider, provider.Models[0], apiKey, cancellationToken);
+            if (IsDisposed)
+            {
+                return;
+            }
+
+            if (!toolResult.Succeeded)
+            {
+                ShowFailure("工具呼叫測試未通過", toolResult);
+                return;
+            }
+
+            CredentialVault.Save(provider.Id, apiKey);
+            try
+            {
+                ProviderCatalog.SaveCustomProvider(customProvidersPath, provider);
+            }
+            catch (Exception)
+            {
+                try
+                {
+                    CredentialVault.Delete(provider.Id);
+                }
+                catch (System.ComponentModel.Win32Exception)
+                {
+                    // 保存失敗時的金鑰清理失敗不掩蓋原始錯誤。
+                }
+
+                throw;
+            }
+
+            SavedProvider = provider;
+            DialogResult = DialogResult.OK;
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or ArgumentException or System.ComponentModel.Win32Exception or IOException or UnauthorizedAccessException)
+        {
+            statusLabel.Text = "驗證已停止。";
+            MessageBox.Show(this, exception.Message, "無法加入自訂供應商", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally
+        {
+            verifying = false;
+            if (!IsDisposed)
+            {
+                SetBusy(false);
+            }
+        }
+    }
+
+    private void ShowFailure(string stage, ConnectionTestResult result)
+    {
+        statusLabel.Text = $"{stage}，供應商與金鑰皆未保存。";
+        MessageBox.Show(
+            this,
+            $"{result.UserMessage}\n\n診斷摘要：{result.DiagnosticSummary}\n\n供應商與 API Key 皆未保存。",
+            result.Title,
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Error);
+    }
+
+    private ProviderDefinition? BuildProvider()
+    {
+        var modelId = modelIdInput.Text.Trim();
+        var provider = new ProviderDefinition
+        {
+            Id = ProviderCatalog.CustomProviderIdPrefix + Guid.NewGuid().ToString("N")[..8],
+            DisplayName = nameInput.Text.Trim(),
+            Enabled = true,
+            BaseUrl = baseUrlInput.Text.Trim(),
+            RequiresApiKey = true,
+            Protocol = "responses",
+            Models =
+            [
+                new ModelDefinition
+                {
+                    Id = modelId,
+                    DisplayName = modelId,
+                    ContextWindow = (int)contextInput.Value,
+                    SupportsImages = imagesInput.Checked,
+                    ReasoningEfforts = effortInput.CheckedItems.Cast<string>().ToList()
+                }
+            ]
+        };
+        return ProviderCatalog.IsValidCustomProvider(provider) ? provider : null;
+    }
+
+    private void SetBusy(bool busy)
+    {
+        UseWaitCursor = busy;
+        verifyButton.Enabled = !busy;
+        cancelButton.Enabled = !busy;
+        nameInput.Enabled = !busy;
+        baseUrlInput.Enabled = !busy;
+        modelIdInput.Enabled = !busy;
+        apiKeyInput.Enabled = !busy;
+        contextInput.Enabled = !busy;
+        imagesInput.Enabled = !busy;
+        effortInput.Enabled = !busy;
     }
 }
