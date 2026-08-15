@@ -4,6 +4,9 @@ using System.Text;
 using System.Text.Json;
 using Xunit;
 
+// 目錄測試會暫時切換工作目錄，序列執行避免類別間互相干擾。
+[assembly: CollectionBehavior(DisableTestParallelization = true)]
+
 namespace CodexModelSwitcher.Tests;
 
 internal sealed class TempDirectory : IDisposable
@@ -1002,6 +1005,145 @@ public sealed class CodexConfigManagerTests
         Assert.Equal("deepseek-v4-flash", current.ModelId);
     }
 
+    [Fact]
+    public void ApplySelection_ToManaged_WritesAuthModeAndModelCatalog()
+    {
+        using var temp = new TempDirectory();
+        var manager = CreateManager(temp.Root);
+
+        manager.ApplySelection(TestProviders.DeepSeek(), Flash(), FakeSwitcherPath(temp));
+
+        var text = File.ReadAllText(ConfigPath(temp));
+        var catalogPath = Path.Combine(temp.Root, "model-switcher", "models.json");
+        Assert.Contains("preferred_auth_method = \"apikey\"", text);
+        Assert.Contains("forced_login_method = \"api\"", text);
+        Assert.Contains($"model_catalog_json = {JsonSerializer.Serialize(catalogPath)}", text);
+        Assert.True(File.Exists(catalogPath));
+
+        using var catalog = JsonDocument.Parse(File.ReadAllText(catalogPath));
+        var models = catalog.RootElement.GetProperty("models");
+        Assert.Equal(2, models.GetArrayLength());
+        Assert.Equal("deepseek-v4-flash", models[0].GetProperty("slug").GetString());
+        Assert.Equal("deepseek-v4-pro", models[1].GetProperty("slug").GetString());
+        Assert.Equal("high", models[0].GetProperty("default_reasoning_level").GetString());
+        Assert.Equal("shell_command", models[0].GetProperty("shell_type").GetString());
+    }
+
+    [Fact]
+    public void ApplySelection_BackToOpenAi_RemovesAuthModeAndCatalogReference()
+    {
+        using var temp = new TempDirectory();
+        var manager = CreateManager(temp.Root);
+        manager.ApplySelection(TestProviders.DeepSeek(), Flash(), FakeSwitcherPath(temp));
+
+        manager.ApplySelection(TestProviders.OpenAi(), TestProviders.OpenAi().Models[0], FakeSwitcherPath(temp));
+
+        var restored = File.ReadAllText(ConfigPath(temp));
+        Assert.DoesNotContain("preferred_auth_method", restored);
+        Assert.DoesNotContain("forced_login_method", restored);
+        Assert.DoesNotContain("model_catalog_json", restored);
+    }
+
+    [Fact]
+    public void ApplySelection_PreservesUsersOwnLoginMethodLine()
+    {
+        using var temp = new TempDirectory();
+        var config = SampleConfig.Replace(
+            "approval_policy = \"on-request\"\n",
+            "approval_policy = \"on-request\"\nforced_login_method = \"chatgpt\"\n");
+        var manager = CreateManager(temp.Root, config);
+
+        manager.ApplySelection(TestProviders.DeepSeek(), Flash(), FakeSwitcherPath(temp));
+        var switched = File.ReadAllText(ConfigPath(temp));
+        Assert.Contains(Marker("forced_login_method", "forced_login_method = \"chatgpt\""), switched);
+        Assert.Contains("forced_login_method = \"api\"", switched);
+
+        manager.ApplySelection(TestProviders.OpenAi(), TestProviders.OpenAi().Models[0], FakeSwitcherPath(temp));
+        var restored = File.ReadAllText(ConfigPath(temp));
+        Assert.Contains("forced_login_method = \"chatgpt\"", restored);
+        Assert.DoesNotContain("forced_login_method = \"api\"", restored);
+    }
+
+    [Fact]
+    public void ApplySelection_LegacyThreeMarkerConfig_RestoresToOpenAi()
+    {
+        using var temp = new TempDirectory();
+        var manager = CreateManager(temp.Root);
+        manager.ApplySelection(TestProviders.DeepSeek(), Flash(), FakeSwitcherPath(temp));
+        var legacy = ToLegacyManagedConfig(File.ReadAllText(ConfigPath(temp)));
+        File.WriteAllText(ConfigPath(temp), legacy);
+        Assert.Equal(3, CountMarkers(legacy));
+
+        manager.ApplySelection(TestProviders.OpenAi(), TestProviders.OpenAi().Models[0], FakeSwitcherPath(temp));
+
+        var restored = File.ReadAllText(ConfigPath(temp));
+        Assert.Contains("model = \"gpt-5-codex\"", restored);
+        Assert.Contains("model_reasoning_effort = \"medium\"", restored);
+        Assert.DoesNotContain("codex-switcher-", restored);
+        Assert.DoesNotContain("# codex-model-switcher-saved-", restored);
+        Assert.DoesNotContain("forced_login_method", restored);
+    }
+
+    [Fact]
+    public void ApplySelection_LegacyThreeMarkerConfig_UpgradesOnCrossSwitch()
+    {
+        using var temp = new TempDirectory();
+        var manager = CreateManager(temp.Root);
+        manager.ApplySelection(TestProviders.DeepSeek(), Flash(), FakeSwitcherPath(temp));
+        var legacy = ToLegacyManagedConfig(File.ReadAllText(ConfigPath(temp)));
+        File.WriteAllText(ConfigPath(temp), legacy);
+
+        manager.ApplySelection(TestProviders.MiniMax(), M3(), FakeSwitcherPath(temp));
+
+        var text = File.ReadAllText(ConfigPath(temp));
+        Assert.Equal(6, CountMarkers(text));
+        Assert.Contains("model_provider = \"codex-switcher-minimax\"", text);
+        Assert.Contains("forced_login_method = \"api\"", text);
+
+        manager.ApplySelection(TestProviders.OpenAi(), TestProviders.OpenAi().Models[0], FakeSwitcherPath(temp));
+        var restored = File.ReadAllText(ConfigPath(temp));
+        Assert.Contains("model = \"gpt-5-codex\"", restored);
+        Assert.DoesNotContain("forced_login_method", restored);
+        Assert.DoesNotContain("# codex-model-switcher-saved-", restored);
+    }
+
+    [Fact]
+    public void ApplySelection_WithIncompleteMarkerSet_Stops()
+    {
+        using var temp = new TempDirectory();
+        var manager = CreateManager(temp.Root);
+        manager.ApplySelection(TestProviders.DeepSeek(), Flash(), FakeSwitcherPath(temp));
+        var mutilated = string.Join("\n", File.ReadAllText(ConfigPath(temp))
+            .Split('\n')
+            .Where(line => !line.StartsWith("# codex-model-switcher-saved-model_provider:", StringComparison.Ordinal)));
+        File.WriteAllText(ConfigPath(temp), mutilated);
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            manager.ApplySelection(TestProviders.OpenAi(), TestProviders.OpenAi().Models[0], FakeSwitcherPath(temp)));
+
+        Assert.Contains("標記不完整", exception.Message);
+    }
+
+    private static string ToLegacyManagedConfig(string switchedText)
+    {
+        string[] removedPrefixes =
+        [
+            "# codex-model-switcher-saved-preferred_auth_method:",
+            "# codex-model-switcher-saved-forced_login_method:",
+            "# codex-model-switcher-saved-model_catalog_json:",
+            "preferred_auth_method",
+            "forced_login_method",
+            "model_catalog_json"
+        ];
+        var kept = switchedText
+            .Split('\n')
+            .Where(line => !removedPrefixes.Any(prefix => line.StartsWith(prefix, StringComparison.Ordinal)));
+        return string.Join("\n", kept);
+    }
+
+    private static int CountMarkers(string text) =>
+        text.Split('\n').Count(line => line.StartsWith("# codex-model-switcher-saved-", StringComparison.Ordinal));
+
     private static CodexConfigManager CreateManager(string home, string configText = SampleConfig)
     {
         File.WriteAllText(Path.Combine(home, "config.toml"), configText);
@@ -1022,6 +1164,76 @@ public sealed class CodexConfigManagerTests
 
     private static string Marker(string key, string originalLine) =>
         $"# codex-model-switcher-saved-{key}: {Convert.ToBase64String(Encoding.UTF8.GetBytes(originalLine))}";
+}
+
+public sealed class CodexModelCatalogTests
+{
+    [Fact]
+    public void BuildJson_UsesProviderModelsAndCapabilities()
+    {
+        var json = CodexModelCatalog.BuildJson(TestProviders.MiniMax());
+
+        using var document = JsonDocument.Parse(json);
+        var models = document.RootElement.GetProperty("models");
+        Assert.Equal(2, models.GetArrayLength());
+
+        var m3 = models[0];
+        Assert.Equal("MiniMax-M3", m3.GetProperty("slug").GetString());
+        Assert.Equal(JsonValueKind.Null, m3.GetProperty("default_reasoning_level").ValueKind);
+        Assert.Equal(0, m3.GetProperty("supported_reasoning_levels").GetArrayLength());
+        Assert.Equal(2, m3.GetProperty("input_modalities").GetArrayLength());
+        Assert.Equal("image", m3.GetProperty("input_modalities")[1].GetString());
+        Assert.Equal(1_000_000, m3.GetProperty("context_window").GetInt32());
+        Assert.Equal(1, m3.GetProperty("priority").GetInt32());
+
+        var m27 = models[1];
+        Assert.Equal("MiniMax-M2.7", m27.GetProperty("slug").GetString());
+        Assert.Equal(1, m27.GetProperty("input_modalities").GetArrayLength());
+        Assert.Equal(2, m27.GetProperty("priority").GetInt32());
+    }
+
+    [Fact]
+    public void BuildJson_ForDeepSeek_KeepsHighAsDefaultReasoning()
+    {
+        var json = CodexModelCatalog.BuildJson(TestProviders.DeepSeek());
+
+        using var document = JsonDocument.Parse(json);
+        var flash = document.RootElement.GetProperty("models")[0];
+        Assert.Equal("high", flash.GetProperty("default_reasoning_level").GetString());
+        Assert.Equal(2, flash.GetProperty("supported_reasoning_levels").GetArrayLength());
+        Assert.Equal("high", flash.GetProperty("supported_reasoning_levels")[0].GetProperty("effort").GetString());
+    }
+
+    [Fact]
+    public void Write_CreatesCatalogFileAtomically()
+    {
+        using var temp = new TempDirectory();
+        var path = Path.Combine(temp.Root, "model-switcher", "models.json");
+
+        CodexModelCatalog.Write(path, TestProviders.DeepSeek());
+
+        Assert.True(File.Exists(path));
+        using var document = JsonDocument.Parse(File.ReadAllText(path));
+        Assert.Equal(2, document.RootElement.GetProperty("models").GetArrayLength());
+        Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(path)!, "*.tmp"));
+    }
+
+    [Fact]
+    public void BuildJson_WithoutModels_Throws()
+    {
+        var empty = new ProviderDefinition
+        {
+            Id = "custom-empty123",
+            DisplayName = "Empty",
+            Enabled = true,
+            BaseUrl = "https://empty.example",
+            RequiresApiKey = true,
+            Protocol = "responses",
+            Models = []
+        };
+
+        Assert.Throws<InvalidOperationException>(() => CodexModelCatalog.BuildJson(empty));
+    }
 }
 
 public sealed class BackupManagerTests
