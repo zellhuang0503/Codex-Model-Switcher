@@ -649,6 +649,8 @@ public sealed class CodexConfigManagerTests
         Assert.Contains("[model_providers.codex-switcher-deepseek.auth]", text);
         Assert.Contains($"command = {JsonSerializer.Serialize(Path.GetFullPath(FakeSwitcherPath(temp)))}", text);
         Assert.Contains("args = [\"token\", \"deepseek\"]", text);
+        Assert.Contains("timeout_ms = 5000", text);
+        Assert.DoesNotContain("refresh_interval_ms", text);
 
         Assert.Contains("# 黃老闆的既有設定", text);
         Assert.Contains("approval_policy = \"on-request\"", text);

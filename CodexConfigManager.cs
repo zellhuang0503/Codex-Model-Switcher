@@ -242,8 +242,9 @@ internal sealed partial class CodexConfigManager
         lines.Add($"[model_providers.{managedId}.auth]{document.NewLine}");
         lines.Add($"command = {Quote(Path.GetFullPath(switcherExecutablePath))}{document.NewLine}");
         lines.Add($"args = [\"token\", {Quote(provider.Id)}]{document.NewLine}");
+        // 不寫 refresh_interval_ms：設為 0 會停用主動取金鑰，桌面版串流重連不走 401 補跑路徑，
+        // 會導致請求從未帶上金鑰；使用 Codex 預設值讓金鑰命令在連線前主動執行。
         lines.Add($"timeout_ms = 5000{document.NewLine}");
-        lines.Add($"refresh_interval_ms = 0{document.NewLine}");
         return document with { Lines = lines };
     }
 
