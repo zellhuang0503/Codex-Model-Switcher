@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 
 namespace CodexModelSwitcher;
@@ -20,7 +21,18 @@ internal sealed partial class CodexConfigManager
     private const int MaximumConfigBytes = 5 * 1024 * 1024;
     private const string ManagedProviderIdPrefix = "codex-switcher-";
     private const string MarkerPrefix = "# codex-model-switcher-saved-";
-    private static readonly string[] ManagedRootKeys = ["model", "model_provider", "model_reasoning_effort"];
+    private static readonly string[] ManagedRootKeys =
+    [
+        "model",
+        "model_provider",
+        "model_reasoning_effort",
+        "preferred_auth_method",
+        "forced_login_method",
+        "model_catalog_json"
+    ];
+
+    // 舊版切換器只管理前三個鍵；讀到舊標記時自動升級。
+    private static readonly string[] LegacyManagedRootKeys = ["model", "model_provider", "model_reasoning_effort"];
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
 
     private readonly string codexHome;
@@ -50,6 +62,8 @@ internal sealed partial class CodexConfigManager
     public bool ConfigExists => File.Exists(configPath);
 
     public string CustomProvidersPath => Path.Combine(codexHome, "model-switcher", "custom-providers.json");
+
+    public string ModelCatalogPath => Path.Combine(codexHome, "model-switcher", "models.json");
 
     public bool CanRestoreOriginal => backupManager.HasOriginalBackup;
 
@@ -95,6 +109,11 @@ internal sealed partial class CodexConfigManager
         using var configLock = AcquireLock();
         var originalBytes = ReadRequiredConfig();
         var original = ReadDocument(originalBytes);
+        if (provider.Id != "openai")
+        {
+            CodexModelCatalog.Write(ModelCatalogPath, provider);
+        }
+
         var transformed = provider.Id != "openai"
             ? BuildManagedConfig(original, provider, model, switcherExecutablePath)
             : BuildOpenAiConfig(original);
@@ -182,7 +201,15 @@ internal sealed partial class CodexConfigManager
                 existingMarkers[key] = document.GetRootLine(key);
             }
         }
-        else if (existingMarkers.Count != ManagedRootKeys.Length)
+        else if (IsLegacyMarkerSet(existingMarkers))
+        {
+            // 舊版標記缺少的鍵當時未被切換器改動，目前設定中的值即原始值。
+            foreach (var key in ManagedRootKeys.Except(LegacyManagedRootKeys))
+            {
+                existingMarkers[key] = document.GetRootLine(key);
+            }
+        }
+        else if (!IsCompleteMarkerSet(existingMarkers))
         {
             throw new InvalidOperationException("找不到完整的 OpenAI 原設定標記，已停止切換。");
         }
@@ -200,6 +227,9 @@ internal sealed partial class CodexConfigManager
         {
             rootLines.Add($"model_reasoning_effort = {Quote(effort)}{document.NewLine}");
         }
+        rootLines.Add($"preferred_auth_method = \"apikey\"{document.NewLine}");
+        rootLines.Add($"forced_login_method = \"api\"{document.NewLine}");
+        rootLines.Add($"model_catalog_json = {Quote(ModelCatalogPath)}{document.NewLine}");
         InsertAtRootEnd(lines, rootLines, document.NewLine);
 
         EnsureTrailingNewLine(lines, document.NewLine);
@@ -236,7 +266,15 @@ internal sealed partial class CodexConfigManager
             return document;
         }
 
-        if (markers.Count != ManagedRootKeys.Length)
+        if (IsLegacyMarkerSet(markers))
+        {
+            // 舊版標記缺少的鍵當時未被切換器改動，目前設定中的值即原始值。
+            foreach (var key in ManagedRootKeys.Except(LegacyManagedRootKeys))
+            {
+                markers[key] = document.GetRootLine(key);
+            }
+        }
+        else if (!IsCompleteMarkerSet(markers))
         {
             throw new InvalidOperationException("原始 OpenAI 模型設定標記不完整，已停止切換。");
         }
@@ -268,6 +306,10 @@ internal sealed partial class CodexConfigManager
             if (providerId != managedId ||
                 document.GetRootValue("model") != model.Id ||
                 document.GetRootValue("model_reasoning_effort") != SelectReasoningEffort(model) ||
+                document.GetRootValue("preferred_auth_method") != "apikey" ||
+                document.GetRootValue("forced_login_method") != "api" ||
+                document.GetRootValue("model_catalog_json") != ModelCatalogPath ||
+                !File.Exists(ModelCatalogPath) ||
                 !document.HasTable($"model_providers.{managedId}") ||
                 !document.HasTable($"model_providers.{managedId}.auth") ||
                 managedTables.Any(table =>
@@ -571,6 +613,12 @@ internal sealed partial class CodexConfigManager
         }
     }
 
+    private static bool IsLegacyMarkerSet(Dictionary<string, string?> markers) =>
+        markers.Count == LegacyManagedRootKeys.Length && LegacyManagedRootKeys.All(markers.ContainsKey);
+
+    private static bool IsCompleteMarkerSet(Dictionary<string, string?> markers) =>
+        markers.Count == ManagedRootKeys.Length && ManagedRootKeys.All(markers.ContainsKey);
+
     private static string ToManagedProviderId(string providerId) => ManagedProviderIdPrefix + providerId;
 
     private static bool IsManagedProviderId(string value) =>
@@ -672,4 +720,134 @@ internal sealed partial class CodexConfigManager
 
     [GeneratedRegex("^[a-z0-9][a-z0-9-]*$", RegexOptions.CultureInvariant)]
     private static partial Regex ManagedSourceIdPattern();
+}
+
+/// <summary>
+/// 產生 Codex 的模型目錄檔（model_catalog_json 指向的 models.json）。
+/// 欄位形狀依 DeepSeek 官方 Codex 整合文件公布的目錄內容，
+/// 只包含目前供應商的模型，避免跨供應商誤用。
+/// </summary>
+internal static class CodexModelCatalog
+{
+    private static readonly JsonSerializerOptions CatalogWriteOptions = new() { WriteIndented = true };
+
+    public static string BuildJson(ProviderDefinition provider)
+    {
+        ArgumentNullException.ThrowIfNull(provider);
+        if (provider.Models.Count == 0)
+        {
+            throw new InvalidOperationException("供應商沒有可用模型，無法產生模型目錄。");
+        }
+
+        var models = new JsonArray();
+        var priority = 1;
+        foreach (var model in provider.Models)
+        {
+            models.Add(BuildModelEntry(provider, model, priority++));
+        }
+
+        return new JsonObject { ["models"] = models }.ToJsonString(CatalogWriteOptions);
+    }
+
+    public static void Write(string catalogPath, ProviderDefinition provider)
+    {
+        var json = BuildJson(provider);
+        using (var document = JsonDocument.Parse(json))
+        {
+            if (document.RootElement.GetProperty("models").GetArrayLength() == 0)
+            {
+                throw new InvalidOperationException("模型目錄內容為空，已停止切換。");
+            }
+        }
+
+        var directory = Path.GetDirectoryName(Path.GetFullPath(catalogPath));
+        if (!string.IsNullOrEmpty(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        var temporaryPath = catalogPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        File.WriteAllText(temporaryPath, json);
+        try
+        {
+            File.Move(temporaryPath, catalogPath, true);
+        }
+        catch
+        {
+            try
+            {
+                File.Delete(temporaryPath);
+            }
+            catch (IOException)
+            {
+                // 暫存清理失敗不應掩蓋原始錯誤。
+            }
+
+            throw;
+        }
+    }
+
+    private static JsonObject BuildModelEntry(ProviderDefinition provider, ModelDefinition model, int priority)
+    {
+        var levels = new JsonArray();
+        foreach (var effort in model.ReasoningEfforts)
+        {
+            levels.Add(new JsonObject
+            {
+                ["effort"] = effort,
+                ["description"] = $"Reasoning effort {effort}"
+            });
+        }
+
+        var defaultLevel = model.ReasoningEfforts.Count == 0
+            ? null
+            : model.ReasoningEfforts.Contains("high")
+                ? "high"
+                : model.ReasoningEfforts[^1];
+
+        var modalities = new JsonArray { "text" };
+        if (model.SupportsImages)
+        {
+            modalities.Add("image");
+        }
+
+        return new JsonObject
+        {
+            ["slug"] = model.Id,
+            ["display_name"] = model.DisplayName,
+            ["description"] = $"{provider.DisplayName} model served through Codex Model Switcher.",
+            ["default_reasoning_level"] = defaultLevel,
+            ["supported_reasoning_levels"] = levels,
+            ["shell_type"] = "shell_command",
+            ["visibility"] = "list",
+            ["supported_in_api"] = true,
+            ["priority"] = priority,
+            ["prefer_websockets"] = false,
+            ["support_verbosity"] = true,
+            ["default_verbosity"] = "low",
+            ["apply_patch_tool_type"] = "freeform",
+            ["web_search_tool_type"] = "text",
+            ["input_modalities"] = modalities,
+            ["supports_image_detail_original"] = false,
+            ["truncation_policy"] = new JsonObject { ["mode"] = "tokens", ["limit"] = 10000 },
+            ["supports_parallel_tool_calls"] = true,
+            ["tool_mode"] = null,
+            ["multi_agent_version"] = "v2",
+            ["use_responses_lite"] = false,
+            ["include_skills_usage_instructions"] = false,
+            ["auto_review_model_override"] = null,
+            ["context_window"] = model.ContextWindow,
+            ["max_context_window"] = model.ContextWindow,
+            ["effective_context_window_percent"] = 95,
+            ["auto_compact_token_limit"] = null,
+            ["comp_hash"] = "3000",
+            ["reasoning_summary_format"] = "experimental",
+            ["default_reasoning_summary"] = "none",
+            ["minimal_client_version"] = "0.144.0",
+            ["availability_nux"] = null,
+            ["upgrade"] = null,
+            ["experimental_supported_tools"] = new JsonArray(),
+            ["supports_search_tool"] = false
+        };
+    }
 }
