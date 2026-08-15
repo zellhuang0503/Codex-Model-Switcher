@@ -647,8 +647,8 @@ public sealed class CodexConfigManagerTests
         Assert.Contains("base_url = \"https://api.deepseek.com\"", text);
         Assert.Contains("wire_api = \"responses\"", text);
         Assert.Contains("[model_providers.codex-switcher-deepseek.auth]", text);
-        Assert.Contains($"command = {JsonSerializer.Serialize(Path.GetFullPath(FakeSwitcherPath(temp)))}", text);
-        Assert.Contains("args = [\"token\", \"deepseek\"]", text);
+        Assert.Contains("command = \"cmd.exe\"", text);
+        Assert.Contains($"args = [\"/c\", {JsonSerializer.Serialize(Path.GetFullPath(FakeSwitcherPath(temp)))}, \"token\", \"deepseek\"]", text);
         Assert.Contains("timeout_ms = 5000", text);
         Assert.DoesNotContain("refresh_interval_ms", text);
 
@@ -765,7 +765,7 @@ public sealed class CodexConfigManagerTests
         Assert.Contains("base_url = \"https://api.minimax.io/v1\"", text);
         Assert.Contains("wire_api = \"responses\"", text);
         Assert.Contains("[model_providers.codex-switcher-minimax.auth]", text);
-        Assert.Contains("args = [\"token\", \"minimax\"]", text);
+        Assert.Contains($"args = [\"/c\", {JsonSerializer.Serialize(Path.GetFullPath(FakeSwitcherPath(temp)))}, \"token\", \"minimax\"]", text);
         Assert.Contains("[mcp_servers.docs]", text);
     }
 
