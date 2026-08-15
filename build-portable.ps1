@@ -154,7 +154,8 @@ try {
     }
 
     foreach ($expected in $expectedFiles) {
-        if (-not ($zipEntries | Where-Object { $_.FullName -eq "Codex-Model-Switcher/$expected" })) {
+        # Windows PowerShell 5.1 的 Compress-Archive 以反斜線分隔壓縮項目路徑，比對前先統一為正斜線。
+        if (-not ($zipEntries | Where-Object { ($_.FullName -replace '\\', '/') -eq "Codex-Model-Switcher/$expected" })) {
             throw "ZIP 缺少必要檔案：$expected"
         }
     }
