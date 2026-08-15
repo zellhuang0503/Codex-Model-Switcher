@@ -88,8 +88,10 @@ $expectedFiles = @(
     "providers.json",
     "使用說明.html"
 )
+# Windows PowerShell 5.1 沒有 Path.GetRelativePath，改用字首截斷計算相對路徑。
+$fullPackageRoot = [System.IO.Path]::GetFullPath($packageRoot).TrimEnd([System.IO.Path]::DirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
 $actualFiles = Get-ChildItem -LiteralPath $packageRoot -File -Recurse | ForEach-Object {
-    [System.IO.Path]::GetRelativePath($packageRoot, $_.FullName)
+    $_.FullName.Substring($fullPackageRoot.Length)
 }
 $unexpectedFiles = $actualFiles | Where-Object { $_ -notin $expectedFiles }
 $missingFiles = $expectedFiles | Where-Object { $_ -notin $actualFiles }
