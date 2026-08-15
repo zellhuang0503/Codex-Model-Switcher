@@ -12,4 +12,9 @@
     <SelfContained>true</SelfContained>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- tests 底下的原始碼由 tests/CodexModelSwitcher.Tests.csproj 自行編譯，不得納入主程式。 -->
+    <Compile Remove="tests/**/*.cs" />
+  </ItemGroup>
+
 </Project>
