@@ -49,6 +49,8 @@ internal sealed partial class CodexConfigManager
 
     public bool ConfigExists => File.Exists(configPath);
 
+    public string CustomProvidersPath => Path.Combine(codexHome, "model-switcher", "custom-providers.json");
+
     public bool CanRestoreOriginal => backupManager.HasOriginalBackup;
 
     public DateTime? OriginalBackupTime => backupManager.OriginalBackupTime;
