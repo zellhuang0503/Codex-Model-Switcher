@@ -33,6 +33,18 @@ Codex Model Switcher 是一個 Windows 可攜版工具，讓使用者在單一�
 
 ## 目前進度
 
-目前只完成 MVP 設計，尚未開始撰寫應用程式，也尚未修改任何使用者的 Codex 設定。
+MVP 功能開發已全部完成：
+
+- Windows 主視窗與高解析度支援
+- 供應商目錄（OpenAI、DeepSeek V4 Flash／Pro、MiniMax M3／M2.7）與損壞時的安全退回
+- API Key 保存於 Windows 認證管理員，Codex 以 `token <供應商ID>` 命令式驗證取用
+- Codex 設定的局部修改、原設定標記保存、原子取代、首次原始備份與最近五份備份、一鍵恢復
+- 連線測試（固定內容、極小 token 上限、不重試）與不含金鑰的診斷摘要
+- 自訂 Responses API 相容供應商：通過文字與工具呼叫雙驗證後才可啟用
+- 首次啟用第三方供應商前的一次性資料流提醒
+- 84 個自動測試（`dotnet test tests/CodexModelSwitcher.Tests.csproj`）
+- 可攜版打包指令碼（`build-portable.ps1`，含發佈內容白名單與金鑰掃描）
+
+DeepSeek 與 MiniMax M3 均已依官方 API 完成實測。剩餘工作為最終打包與乾淨 Windows 環境驗收。
 
 詳細設計請見 [MVP 設計文件](docs/superpowers/specs/2026-08-14-windows-portable-mvp-design.md)。

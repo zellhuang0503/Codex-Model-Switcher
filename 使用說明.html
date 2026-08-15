@@ -43,9 +43,10 @@
     <ul>
       <li><strong>OpenAI：</strong>沿用 Codex 原本的 ChatGPT／OpenAI 登入，不保存帳號密碼。</li>
       <li><strong>DeepSeek：</strong>V4 Flash、V4 Pro，使用官方 Responses API。</li>
-      <li><strong>MiniMax M3：</strong>尚未完成 Codex Responses API 相容驗證，因此暫停選取。</li>
+      <li><strong>MiniMax：</strong>M3 與 M2.7，使用官方 Responses API（網址含 <code>/v1</code>）。</li>
+      <li><strong>自訂供應商：</strong>可自行新增明確標示為 OpenAI Responses API 相容的供應商，加入前必須通過文字與工具呼叫雙驗證。</li>
     </ul>
-    <div class="warning"><strong>這是測試版，不是完整正式版。</strong> Gemini、Kimi、ZAI／GLM 國際版與 MiniMax 尚未開放切換；未驗證的模型不會為了湊數而啟用。</div>
+    <div class="warning"><strong>這是測試版，不是完整正式版。</strong> Gemini、Kimi、ZAI／GLM 國際版尚未開放切換；未通過驗證的模型不會為了湊數而啟用。</div>
   </section>
 
   <section>
@@ -60,25 +61,37 @@
   </section>
 
   <section>
-    <h2>設定 DeepSeek API Key</h2>
+    <h2>設定 API Key（DeepSeek／MiniMax）</h2>
     <ol>
-      <li>在「供應商」選擇 DeepSeek。</li>
+      <li>在「供應商」選擇 DeepSeek 或 MiniMax。</li>
       <li>點「設定 API Key」，貼上自己的金鑰後選擇安全保存。</li>
       <li>程式不會再次顯示已保存金鑰的完整內容。</li>
       <li>需要更換或刪除時，點「管理 API Key」。</li>
     </ol>
-    <p>金鑰申請與帳戶管理請使用 <a href="https://platform.deepseek.com/api_keys">DeepSeek 官方平台</a>。</p>
+    <p>金鑰申請與帳戶管理請使用 <a href="https://platform.deepseek.com/api_keys">DeepSeek 官方平台</a>或 <a href="https://platform.minimax.io">MiniMax 官方平台</a>。</p>
   </section>
 
   <section>
     <h2>測試連線與費用</h2>
     <ol>
-      <li>選擇 DeepSeek 與模型，並先保存 API Key。</li>
+      <li>選擇 DeepSeek 或 MiniMax 與模型，並先保存 API Key。</li>
       <li>點「測試連線」。程式會先顯示費用提醒，只有選擇「是」才會連線。</li>
       <li>測試只送固定文字，不讀取專案內容；最多要求 16 個輸出 token，而且不自動重試。</li>
       <li>測試仍可能依供應商價格產生極少量費用。結果若含 token 用量，程式會顯示數字。</li>
     </ol>
-    <p>價格可能變動，請以 <a href="https://api-docs.deepseek.com/quick_start/pricing/">DeepSeek 官方計費頁</a>為準。</p>
+    <p>價格可能變動，請以 <a href="https://api-docs.deepseek.com/quick_start/pricing/">DeepSeek</a> 與 <a href="https://platform.minimax.io">MiniMax</a> 官方計費資訊為準。</p>
+  </section>
+
+  <section>
+    <h2>新增自訂供應商</h2>
+    <ol>
+      <li>點「新增自訂供應商…」。只支援明確標示為 OpenAI Responses API 相容的供應商。</li>
+      <li>填寫顯示名稱、Base URL（https 開頭的完整網址）、模型 ID、API Key、上下文長度、是否支援圖片與可用推理等級。</li>
+      <li>點「驗證並加入」。程式會依序送出一次最小文字回應測試與一次工具呼叫測試，兩項都通過才會保存；任一失敗都不會加入，也不會保存金鑰。</li>
+      <li>驗證會產生極少量 API 費用，執行前會再次提醒。</li>
+      <li>選到自訂供應商時可點「移除自訂供應商」，並可選擇是否同時刪除已保存的金鑰。</li>
+    </ol>
+    <div class="safe"><strong>自訂清單不含金鑰。</strong> 自訂供應商保存在您使用者資料夾的 <code>.codex\model-switcher\custom-providers.json</code>，其中只有網址與模型資訊；API Key 仍然只存於 Windows 認證管理員。</div>
   </section>
 
   <section>
@@ -108,7 +121,8 @@
     <h2>資料會送到哪裡</h2>
     <ul>
       <li>切換器本身不讀取、不保存、不上傳 Codex 專案內容，也沒有遙測或遠端日誌。</li>
-      <li>按「測試連線」只會把固定測試文字送到所選供應商。</li>
+      <li>第一次切換到第三方供應商前，程式會顯示一次資料流提醒，同意後才會繼續。</li>
+      <li>按「測試連線」或自訂供應商的「驗證並加入」，只會把固定測試內容送到所選供應商。</li>
       <li>切換後使用 Codex 工作時，Codex 為完成任務所需的提示與專案片段，會傳送給目前選擇的模型供應商。</li>
       <li>不要將學生個資、客戶機密或未經授權資料傳給第三方模型。</li>
     </ul>
