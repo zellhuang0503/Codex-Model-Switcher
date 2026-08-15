@@ -432,6 +432,165 @@ public sealed class ProviderCatalogTests
     }
 }
 
+public sealed class CustomProviderCatalogTests
+{
+    [Fact]
+    public void SaveCustomProvider_AssignsIdAndAppearsInMergedCatalog()
+    {
+        using var temp = new TempDirectory();
+        var path = StorePath(temp);
+
+        var saved = ProviderCatalog.SaveCustomProvider(path, ValidCustom(withId: false));
+
+        Assert.StartsWith("custom-", saved.Id);
+        Assert.True(File.Exists(path));
+        var result = ProviderCatalog.Load(path);
+        Assert.Equal(4, result.Providers.Count);
+        Assert.Contains(result.Providers, provider => provider.Id == saved.Id);
+        Assert.Contains("自訂供應商 1 個", result.Notice);
+    }
+
+    [Fact]
+    public void Load_WithoutCustomFile_KeepsBuiltInCatalog()
+    {
+        using var temp = new TempDirectory();
+
+        var missing = ProviderCatalog.Load(Path.Combine(temp.Root, "none.json"));
+        var nullPath = ProviderCatalog.Load(null);
+
+        Assert.Equal(3, missing.Providers.Count);
+        Assert.Equal(3, nullPath.Providers.Count);
+    }
+
+    [Fact]
+    public void Load_WithBrokenCustomFile_KeepsBuiltInsAndExplains()
+    {
+        using var temp = new TempDirectory();
+        var path = StorePath(temp);
+        File.WriteAllText(path, "{ 這不是合法的 JSON");
+
+        var result = ProviderCatalog.Load(path);
+
+        Assert.Equal(3, result.Providers.Count);
+        Assert.Contains("無法讀取或解析", result.Notice);
+    }
+
+    [Fact]
+    public void Load_SkipsInvalidOrConflictingCustomEntries()
+    {
+        using var temp = new TempDirectory();
+        var path = StorePath(temp);
+        File.WriteAllText(path, """
+            {
+              "schemaVersion": 1,
+              "providers": [
+                {
+                  "id": "custom-ok111111",
+                  "displayName": "OK Provider",
+                  "enabled": true,
+                  "baseUrl": "https://ok.example/v1",
+                  "requiresApiKey": true,
+                  "protocol": "responses",
+                  "models": [ { "id": "ok-model", "displayName": "OK Model", "contextWindow": 1000, "reasoningEfforts": [] } ]
+                },
+                {
+                  "id": "custom-bad22222",
+                  "displayName": "Bad Provider",
+                  "enabled": true,
+                  "baseUrl": "http://bad.example",
+                  "requiresApiKey": true,
+                  "protocol": "responses",
+                  "models": [ { "id": "bad-model", "displayName": "Bad Model", "contextWindow": 1000, "reasoningEfforts": [] } ]
+                },
+                {
+                  "id": "deepseek",
+                  "displayName": "Fake DeepSeek",
+                  "enabled": true,
+                  "baseUrl": "https://evil.example",
+                  "requiresApiKey": true,
+                  "protocol": "responses",
+                  "models": [ { "id": "fake-model", "displayName": "Fake Model", "contextWindow": 1000, "reasoningEfforts": [] } ]
+                }
+              ]
+            }
+            """);
+
+        var result = ProviderCatalog.Load(path);
+
+        Assert.Equal(4, result.Providers.Count);
+        Assert.Contains(result.Providers, provider => provider.Id == "custom-ok111111");
+        Assert.DoesNotContain(result.Providers, provider => provider.Id == "custom-bad22222");
+        Assert.Equal("https://api.deepseek.com", result.Providers.Single(provider => provider.Id == "deepseek").BaseUrl);
+        Assert.Contains("2 個自訂項目格式錯誤已略過", result.Notice);
+    }
+
+    [Fact]
+    public void SaveCustomProvider_WithInvalidData_ThrowsAndWritesNothing()
+    {
+        using var temp = new TempDirectory();
+        var path = StorePath(temp);
+        var insecure = ValidCustom();
+        insecure.BaseUrl = "http://api.acme.example";
+
+        Assert.Throws<InvalidOperationException>(() => ProviderCatalog.SaveCustomProvider(path, insecure));
+
+        Assert.False(File.Exists(path));
+    }
+
+    [Fact]
+    public void SaveCustomProvider_OnBrokenFile_ThrowsWithoutOverwriting()
+    {
+        using var temp = new TempDirectory();
+        var path = StorePath(temp);
+        File.WriteAllText(path, "{ 已損壞");
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            ProviderCatalog.SaveCustomProvider(path, ValidCustom()));
+
+        Assert.Contains("損壞", exception.Message);
+        Assert.Equal("{ 已損壞", File.ReadAllText(path));
+    }
+
+    [Fact]
+    public void RemoveCustomProvider_RemovesOnlyThatEntry()
+    {
+        using var temp = new TempDirectory();
+        var path = StorePath(temp);
+        var first = ProviderCatalog.SaveCustomProvider(path, ValidCustom(withId: false));
+        var second = ProviderCatalog.SaveCustomProvider(path, ValidCustom(withId: false));
+
+        Assert.True(ProviderCatalog.RemoveCustomProvider(path, first.Id));
+
+        var result = ProviderCatalog.Load(path);
+        Assert.DoesNotContain(result.Providers, provider => provider.Id == first.Id);
+        Assert.Contains(result.Providers, provider => provider.Id == second.Id);
+        Assert.False(ProviderCatalog.RemoveCustomProvider(path, first.Id));
+        Assert.False(ProviderCatalog.RemoveCustomProvider(path, "deepseek"));
+    }
+
+    private static string StorePath(TempDirectory temp) => Path.Combine(temp.Root, "custom-providers.json");
+
+    private static ProviderDefinition ValidCustom(bool withId = true) => new()
+    {
+        Id = withId ? "custom-abc12345" : string.Empty,
+        DisplayName = "Acme Responses",
+        Enabled = true,
+        BaseUrl = "https://api.acme.example/v1",
+        RequiresApiKey = true,
+        Protocol = "responses",
+        Models =
+        [
+            new ModelDefinition
+            {
+                Id = "acme-large",
+                DisplayName = "Acme Large",
+                ContextWindow = 200_000,
+                ReasoningEfforts = ["high"]
+            }
+        ]
+    };
+}
+
 public sealed class CodexConfigManagerTests
 {
     private const string SampleConfig = """
@@ -1109,6 +1268,80 @@ public sealed class ConnectionTesterTests
         Assert.False(result.Succeeded);
         Assert.Contains("invalid_state", result.DiagnosticSummary);
         Assert.Null(handler.LastUri);
+    }
+
+    [Fact]
+    public async Task TestToolCallAsync_WhenModelCallsTool_Succeeds()
+    {
+        var (result, handler) = await RunToolCallAsync(_ => JsonResponse(HttpStatusCode.OK,
+            """{"object":"response","output":[{"type":"function_call","call_id":"c1","name":"check_switcher","arguments":"{\"status\":\"ok\"}"}],"usage":{"input_tokens":42,"output_tokens":9}}"""));
+
+        Assert.True(result.Succeeded);
+        Assert.Equal("工具呼叫測試成功", result.Title);
+        Assert.Equal(42, result.InputTokens);
+        Assert.Equal(9, result.OutputTokens);
+
+        using var body = JsonDocument.Parse(handler.LastBody!);
+        var tools = body.RootElement.GetProperty("tools");
+        Assert.Equal(1, tools.GetArrayLength());
+        Assert.Equal("check_switcher", tools[0].GetProperty("name").GetString());
+        Assert.Equal(128, body.RootElement.GetProperty("max_output_tokens").GetInt32());
+        Assert.False(body.RootElement.GetProperty("stream").GetBoolean());
+    }
+
+    [Fact]
+    public async Task TestToolCallAsync_WhenModelSkipsTool_Fails()
+    {
+        var (result, _) = await RunToolCallAsync(_ => JsonResponse(HttpStatusCode.OK,
+            """{"object":"response","output":[{"type":"message","content":[{"type":"output_text","text":"OK"}]}]}"""));
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("模型未執行工具呼叫", result.Title);
+        Assert.Contains("tool_call_missing", result.DiagnosticSummary);
+    }
+
+    [Fact]
+    public async Task TestToolCallAsync_WithWrongToolName_Fails()
+    {
+        var (result, _) = await RunToolCallAsync(_ => JsonResponse(HttpStatusCode.OK,
+            """{"object":"response","output":[{"type":"function_call","call_id":"c1","name":"other_tool","arguments":"{}"}]}"""));
+
+        Assert.False(result.Succeeded);
+        Assert.Contains("tool_call_missing", result.DiagnosticSummary);
+    }
+
+    [Fact]
+    public async Task TestToolCallAsync_WithUnauthorizedResponse_MapsToAuthenticationFailure()
+    {
+        var (result, _) = await RunToolCallAsync(_ => new HttpResponseMessage(HttpStatusCode.Unauthorized));
+
+        Assert.False(result.Succeeded);
+        Assert.Contains("authentication_failed", result.DiagnosticSummary);
+        Assert.DoesNotContain(ApiKey, result.DiagnosticSummary);
+    }
+
+    [Fact]
+    public async Task TestToolCallAsync_WithOpenAiProvider_RefusesToSendAnything()
+    {
+        var (result, handler) = await RunToolCallAsync(
+            _ => JsonResponse(HttpStatusCode.OK, """{"object":"response"}"""),
+            TestProviders.OpenAi());
+
+        Assert.False(result.Succeeded);
+        Assert.Contains("invalid_state", result.DiagnosticSummary);
+        Assert.Null(handler.LastUri);
+    }
+
+    private static async Task<(ConnectionTestResult Result, StubHttpHandler Handler)> RunToolCallAsync(
+        Func<HttpRequestMessage, HttpResponseMessage> respond,
+        ProviderDefinition? provider = null)
+    {
+        var handler = new StubHttpHandler(respond);
+        using var client = new HttpClient(handler);
+        using var tester = new ConnectionTester(client);
+        var chosenProvider = provider ?? TestProviders.DeepSeek();
+        var result = await tester.TestToolCallAsync(chosenProvider, chosenProvider.Models[0], ApiKey);
+        return (result, handler);
     }
 
     private static async Task<(ConnectionTestResult Result, StubHttpHandler Handler)> RunAsync(

@@ -16,6 +16,7 @@ internal sealed record ConnectionTestResult(
 internal sealed class ConnectionTester : IDisposable
 {
     private const int MaximumResponseBytes = 64 * 1024;
+    private const string VerificationToolName = "check_switcher";
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(30);
     private readonly HttpClient httpClient;
     private readonly bool ownsClient;
@@ -38,11 +39,75 @@ internal sealed class ConnectionTester : IDisposable
         this.httpClient.MaxResponseContentBufferSize = MaximumResponseBytes;
     }
 
-    public async Task<ConnectionTestResult> TestAsync(
+    public Task<ConnectionTestResult> TestAsync(
         ProviderDefinition provider,
         ModelDefinition model,
         string apiKey,
         CancellationToken cancellationToken = default)
+    {
+        var payload = new
+        {
+            model = model.Id,
+            input = "Reply with exactly OK.",
+            max_output_tokens = 16,
+            stream = false
+        };
+        var success = new SafeDiagnostic("連線測試成功", "金鑰、模型與 Responses API 均可正常使用。", "success");
+        return ExecuteAsync(provider, model, apiKey, payload, static _ => null, success, cancellationToken);
+    }
+
+    public Task<ConnectionTestResult> TestToolCallAsync(
+        ProviderDefinition provider,
+        ModelDefinition model,
+        string apiKey,
+        CancellationToken cancellationToken = default)
+    {
+        var payload = new
+        {
+            model = model.Id,
+            input = "Call the check_switcher tool with status set to \"ok\".",
+            tools = new object[]
+            {
+                new
+                {
+                    type = "function",
+                    name = VerificationToolName,
+                    description = "Report switcher connectivity status.",
+                    parameters = new
+                    {
+                        type = "object",
+                        properties = new { status = new { type = "string" } },
+                        required = new[] { "status" }
+                    }
+                }
+            },
+            max_output_tokens = 128,
+            stream = false
+        };
+        var success = new SafeDiagnostic("工具呼叫測試成功", "供應商已正確執行 Responses API 工具呼叫。", "success");
+        return ExecuteAsync(
+            provider,
+            model,
+            apiKey,
+            payload,
+            static root => HasFunctionCall(root, VerificationToolName)
+                ? null
+                : new SafeDiagnostic(
+                    "模型未執行工具呼叫",
+                    "供應商有回應，但沒有呼叫測試工具，無法確認工具呼叫相容性。",
+                    "tool_call_missing"),
+            success,
+            cancellationToken);
+    }
+
+    private async Task<ConnectionTestResult> ExecuteAsync(
+        ProviderDefinition provider,
+        ModelDefinition model,
+        string apiKey,
+        object payload,
+        Func<JsonElement, SafeDiagnostic?> validateBody,
+        SafeDiagnostic successDiagnostic,
+        CancellationToken cancellationToken)
     {
         try
         {
@@ -51,13 +116,7 @@ internal sealed class ConnectionTester : IDisposable
             using var request = new HttpRequestMessage(HttpMethod.Post, endpoint);
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
             request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-            request.Content = JsonContent.Create(new
-            {
-                model = model.Id,
-                input = "Reply with exactly OK.",
-                max_output_tokens = 16,
-                stream = false
-            });
+            request.Content = JsonContent.Create(payload, payload.GetType());
 
             using var response = await httpClient.SendAsync(
                 request,
@@ -93,12 +152,23 @@ internal sealed class ConnectionTester : IDisposable
 
             var inputTokens = ReadUsage(document.RootElement, "input_tokens");
             var outputTokens = ReadUsage(document.RootElement, "output_tokens");
-            var success = new SafeDiagnostic("連線測試成功", "金鑰、模型與 Responses API 均可正常使用。", "success");
+            var bodyFailure = validateBody(document.RootElement);
+            if (bodyFailure is not null)
+            {
+                return new ConnectionTestResult(
+                    false,
+                    bodyFailure.Title,
+                    bodyFailure.UserMessage,
+                    DiagnosticSanitizer.BuildSummary(provider, model, bodyFailure, response.StatusCode),
+                    inputTokens,
+                    outputTokens);
+            }
+
             return new ConnectionTestResult(
                 true,
-                success.Title,
-                success.UserMessage,
-                DiagnosticSanitizer.BuildSummary(provider, model, success, response.StatusCode),
+                successDiagnostic.Title,
+                successDiagnostic.UserMessage,
+                DiagnosticSanitizer.BuildSummary(provider, model, successDiagnostic, response.StatusCode),
                 inputTokens,
                 outputTokens);
         }
@@ -158,6 +228,30 @@ internal sealed class ConnectionTester : IDisposable
         {
             throw new InvalidOperationException("目前選擇無法執行第三方供應商連線測試。");
         }
+    }
+
+    private static bool HasFunctionCall(JsonElement root, string toolName)
+    {
+        if (!root.TryGetProperty("output", out var output) || output.ValueKind != JsonValueKind.Array)
+        {
+            return false;
+        }
+
+        foreach (var item in output.EnumerateArray())
+        {
+            if (item.ValueKind == JsonValueKind.Object &&
+                item.TryGetProperty("type", out var type) &&
+                type.ValueKind == JsonValueKind.String &&
+                type.GetString() == "function_call" &&
+                item.TryGetProperty("name", out var name) &&
+                name.ValueKind == JsonValueKind.String &&
+                name.GetString() == toolName)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static int? ReadUsage(JsonElement root, string propertyName)
