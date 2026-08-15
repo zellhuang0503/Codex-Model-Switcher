@@ -612,6 +612,9 @@ public sealed class CodexConfigManagerTests
 
         """;
 
+    // 原始檔在 Windows 簽出時是 CRLF、在 Linux 是 LF；正規化讓測試不受簽出方式影響。
+    private static readonly string NormalizedSampleConfig = SampleConfig.Replace("\r\n", "\n");
+
     [Fact]
     public void ReadCurrent_WithoutConfig_AsksUserToStartCodexFirst()
     {
@@ -875,7 +878,7 @@ public sealed class CodexConfigManagerTests
     public void ApplySelection_WithCorruptedMarker_Stops()
     {
         using var temp = new TempDirectory();
-        var config = SampleConfig + "# codex-model-switcher-saved-model: !!!\n";
+        var config = NormalizedSampleConfig + "# codex-model-switcher-saved-model: !!!\n";
         var manager = CreateManager(temp.Root, config);
 
         var exception = Assert.Throws<InvalidOperationException>(() =>
@@ -890,7 +893,7 @@ public sealed class CodexConfigManagerTests
     {
         using var temp = new TempDirectory();
         var marker = Marker("model", "model = \"old\"");
-        var config = SampleConfig + marker + "\n" + marker + "\n";
+        var config = NormalizedSampleConfig + marker + "\n" + marker + "\n";
         var manager = CreateManager(temp.Root, config);
 
         var exception = Assert.Throws<InvalidOperationException>(() =>
@@ -920,7 +923,7 @@ public sealed class CodexConfigManagerTests
     {
         using var temp = new TempDirectory();
         var withBom = Encoding.UTF8.Preamble.ToArray()
-            .Concat(Encoding.UTF8.GetBytes(SampleConfig))
+            .Concat(Encoding.UTF8.GetBytes(NormalizedSampleConfig))
             .ToArray();
         File.WriteAllBytes(ConfigPath(temp), withBom);
         var manager = CodexConfigManager.ForTest(temp.Root);
@@ -935,7 +938,7 @@ public sealed class CodexConfigManagerTests
     public void ApplySelection_PreservesCrlfNewlines()
     {
         using var temp = new TempDirectory();
-        var manager = CreateManager(temp.Root, SampleConfig.Replace("\n", "\r\n"));
+        var manager = CreateManager(temp.Root, NormalizedSampleConfig.Replace("\n", "\r\n"));
 
         manager.ApplySelection(TestProviders.DeepSeek(), Flash(), FakeSwitcherPath(temp));
 
@@ -1048,7 +1051,7 @@ public sealed class CodexConfigManagerTests
     public void ApplySelection_PreservesUsersOwnLoginMethodLine()
     {
         using var temp = new TempDirectory();
-        var config = SampleConfig.Replace(
+        var config = NormalizedSampleConfig.Replace(
             "approval_policy = \"on-request\"\n",
             "approval_policy = \"on-request\"\nforced_login_method = \"chatgpt\"\n");
         var manager = CreateManager(temp.Root, config);
@@ -1144,9 +1147,9 @@ public sealed class CodexConfigManagerTests
     private static int CountMarkers(string text) =>
         text.Split('\n').Count(line => line.StartsWith("# codex-model-switcher-saved-", StringComparison.Ordinal));
 
-    private static CodexConfigManager CreateManager(string home, string configText = SampleConfig)
+    private static CodexConfigManager CreateManager(string home, string? configText = null)
     {
-        File.WriteAllText(Path.Combine(home, "config.toml"), configText);
+        File.WriteAllText(Path.Combine(home, "config.toml"), configText ?? NormalizedSampleConfig);
         return CodexConfigManager.ForTest(home);
     }
 
