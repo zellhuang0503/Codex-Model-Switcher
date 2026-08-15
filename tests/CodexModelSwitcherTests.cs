@@ -106,7 +106,7 @@ internal static class TestProviders
         Id = "minimax",
         DisplayName = "MiniMax",
         Enabled = true,
-        BaseUrl = "https://api.minimax.io",
+        BaseUrl = "https://api.minimax.io/v1",
         RequiresApiKey = true,
         Protocol = "responses",
         Models =
@@ -117,6 +117,13 @@ internal static class TestProviders
                 DisplayName = "MiniMax M3",
                 ContextWindow = 1_000_000,
                 SupportsImages = true,
+                ReasoningEfforts = []
+            },
+            new ModelDefinition
+            {
+                Id = "MiniMax-M2.7",
+                DisplayName = "MiniMax M2.7",
+                ContextWindow = 204_800,
                 ReasoningEfforts = []
             }
         ]
@@ -136,8 +143,8 @@ public sealed class ProviderCatalogTests
         Assert.Equal(2, deepSeek.Models.Count);
         var miniMax = result.Providers.Single(provider => provider.Id == "minimax");
         Assert.Equal("responses", miniMax.Protocol);
-        var miniMaxModel = Assert.Single(miniMax.Models);
-        Assert.Equal("MiniMax-M3", miniMaxModel.Id);
+        Assert.Equal("https://api.minimax.io/v1", miniMax.BaseUrl);
+        Assert.Equal(new[] { "MiniMax-M3", "MiniMax-M2.7" }, miniMax.Models.Select(model => model.Id));
         Assert.Contains("已載入 3 個可用供應商", result.Notice);
     }
 
@@ -588,7 +595,7 @@ public sealed class CodexConfigManagerTests
         Assert.Contains(Marker("model_reasoning_effort", "model_reasoning_effort = \"medium\""), text);
         Assert.Contains("[model_providers.codex-switcher-minimax]", text);
         Assert.Contains("name = \"MiniMax\"", text);
-        Assert.Contains("base_url = \"https://api.minimax.io\"", text);
+        Assert.Contains("base_url = \"https://api.minimax.io/v1\"", text);
         Assert.Contains("wire_api = \"responses\"", text);
         Assert.Contains("[model_providers.codex-switcher-minimax.auth]", text);
         Assert.Contains("args = [\"token\", \"minimax\"]", text);
