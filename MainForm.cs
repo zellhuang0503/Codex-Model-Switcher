@@ -348,13 +348,19 @@ internal sealed class MainForm : Form
             Muted);
         footerStatus.Anchor = AnchorStyles.Left;
 
-        var version = MakeLabel("Windows 可攜版 MVP", 9F, FontStyle.Bold, Accent);
+        var version = MakeLabel($"Windows 可攜版 {AppVersion}", 9F, FontStyle.Bold, Accent);
         version.Anchor = AnchorStyles.Right;
 
         footer.Controls.Add(footerStatus, 0, 0);
         footer.Controls.Add(version, 1, 0);
         return footer;
     }
+
+    // 版本取自組件中繼資料，與專案檔的 Version 設定同一來源，供使用者回報問題時比對。
+    private static string AppVersion =>
+        typeof(MainForm).Assembly.GetName().Version is { } version
+            ? $"v{version.Major}.{version.Minor}.{version.Build}"
+            : "版本未知";
 
     private static Panel MakeCard() => new()
     {
