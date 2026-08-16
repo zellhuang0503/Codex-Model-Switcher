@@ -11,10 +11,21 @@ $releaseRoot = Join-Path $projectRoot "release"
 $workRoot = Join-Path $releaseRoot "work"
 $publishRoot = Join-Path $workRoot "publish"
 $packageRoot = Join-Path $releaseRoot "Codex-Model-Switcher"
-$zipPath = Join-Path $releaseRoot "Codex-Model-Switcher-Windows-x64-Preview.zip"
 $projectFile = Join-Path $projectRoot "CodexModelSwitcher.csproj"
 $catalogFile = Join-Path $projectRoot "providers.json"
 $guideFile = Join-Path $projectRoot "使用說明.html"
+$licenseFile = Join-Path $projectRoot "LICENSE"
+
+# 版本號以專案檔為單一事實來源，ZIP 檔名與發佈說明皆沿用。
+$versionNode = ([xml](Get-Content -LiteralPath $projectFile -Raw)).SelectSingleNode('//PropertyGroup/Version')
+if (-not $versionNode) {
+    throw "專案檔缺少 Version 設定，無法決定發佈版本。"
+}
+$version = $versionNode.InnerText.Trim()
+if ($version -notmatch '^\d+\.\d+\.\d+$') {
+    throw "專案檔的版本號格式不正確：$version"
+}
+$zipPath = Join-Path $releaseRoot "Codex-Model-Switcher-Windows-x64-v$version.zip"
 
 function Assert-ChildPath {
     param(
@@ -38,7 +49,7 @@ function Remove-BuildTarget {
     }
 }
 
-foreach ($requiredFile in @($projectFile, $catalogFile, $guideFile)) {
+foreach ($requiredFile in @($projectFile, $catalogFile, $guideFile, $licenseFile)) {
     if (-not (Test-Path -LiteralPath $requiredFile -PathType Leaf)) {
         throw "缺少發佈必要檔案：$([System.IO.Path]::GetFileName($requiredFile))"
     }
@@ -49,8 +60,10 @@ Get-Content -LiteralPath $catalogFile -Raw | ConvertFrom-Json | Out-Null
 Remove-BuildTarget -Path $workRoot
 Remove-BuildTarget -Path $packageRoot
 Assert-ChildPath -Path $zipPath -Parent $projectRoot
-if (Test-Path -LiteralPath $zipPath) {
-    Remove-Item -LiteralPath $zipPath -Force
+# 一併清除舊版本的 ZIP，避免發佈資料夾同時存在多個版本造成誤傳。
+Get-ChildItem -LiteralPath $releaseRoot -Filter "Codex-Model-Switcher-Windows-x64-*.zip" -File -ErrorAction SilentlyContinue | ForEach-Object {
+    Assert-ChildPath -Path $_.FullName -Parent $projectRoot
+    Remove-Item -LiteralPath $_.FullName -Force
 }
 
 New-Item -ItemType Directory -Path $publishRoot -Force | Out-Null
@@ -82,11 +95,13 @@ if (-not (Test-Path -LiteralPath $publishedExe -PathType Leaf)) {
 Copy-Item -LiteralPath $publishedExe -Destination $packageRoot
 Copy-Item -LiteralPath $catalogFile -Destination $packageRoot
 Copy-Item -LiteralPath $guideFile -Destination $packageRoot
+Copy-Item -LiteralPath $licenseFile -Destination (Join-Path $packageRoot "LICENSE.txt")
 
 $expectedFiles = @(
     "CodexModelSwitcher.exe",
     "providers.json",
-    "使用說明.html"
+    "使用說明.html",
+    "LICENSE.txt"
 )
 # Windows PowerShell 5.1 沒有 Path.GetRelativePath，改用字首截斷計算相對路徑。
 $fullPackageRoot = [System.IO.Path]::GetFullPath($packageRoot).TrimEnd([System.IO.Path]::DirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
@@ -118,7 +133,8 @@ $binarySecretPatterns = @(
 )
 $textFiles = @(
     (Join-Path $packageRoot "providers.json"),
-    (Join-Path $packageRoot "使用說明.html")
+    (Join-Path $packageRoot "使用說明.html"),
+    (Join-Path $packageRoot "LICENSE.txt")
 )
 foreach ($pattern in $secretPatterns) {
     $matches = Select-String -LiteralPath $textFiles -Pattern $pattern -AllMatches
@@ -169,6 +185,7 @@ Remove-BuildTarget -Path $workRoot
 $zip = Get-Item -LiteralPath $zipPath
 $hash = Get-FileHash -LiteralPath $zipPath -Algorithm SHA256
 Write-Host "WINDOWS_PORTABLE_PREVIEW_OK"
+Write-Host "版本：$version"
 Write-Host "ZIP：$($zip.FullName)"
 Write-Host "大小：$($zip.Length) bytes"
 Write-Host "SHA256：$($hash.Hash)"
