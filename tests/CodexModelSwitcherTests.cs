@@ -597,7 +597,7 @@ public sealed class CustomProviderCatalogTests
 public sealed class CodexConfigManagerTests
 {
     private const string SampleConfig = """
-        # 黃老闆的既有設定
+        # 專案負責人的既有設定
         model = "gpt-5-codex"
         model_provider = "openai"
         model_reasoning_effort = "medium"
@@ -652,7 +652,7 @@ public sealed class CodexConfigManagerTests
         Assert.Contains("timeout_ms = 5000", text);
         Assert.DoesNotContain("refresh_interval_ms", text);
 
-        Assert.Contains("# 黃老闆的既有設定", text);
+        Assert.Contains("# 專案負責人的既有設定", text);
         Assert.Contains("approval_policy = \"on-request\"", text);
         Assert.Contains("[mcp_servers.docs]", text);
         Assert.Contains("command = \"docs-server\"", text);
