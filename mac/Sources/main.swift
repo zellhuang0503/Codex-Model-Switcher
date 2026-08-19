@@ -35,7 +35,7 @@ struct CodexModelSwitcherApp: App {
                     NSApplication.shared.orderFrontStandardAboutPanel(
                         options: [
                             NSApplication.AboutPanelOptionKey.applicationName: "Codex 多模型切換器",
-                            NSApplication.AboutPanelOptionKey.version: "1.0.0"
+                            NSApplication.AboutPanelOptionKey.version: "1.0.1"
                         ]
                     )
                 }
