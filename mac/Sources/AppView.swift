@@ -43,11 +43,39 @@ public class AppState: ObservableObject {
     // Backups
     @Published public var backups: [BackupItem] = []
 
+    // 鑰匙圈金鑰存在狀態快取：KeychainVault.exists 會啟動子程序，不可在 View body 內同步呼叫
+    @Published public var keyPresence: [String: Bool] = [:]
+
     public init() {
         self.status = CodexConfigManager.shared.getStatus()
         self.allProviders = ProviderCatalog.shared.getAllProviders()
         self.backups = CodexConfigManager.shared.listBackups()
         syncSelectionWithCurrentStatus()
+        refreshKeyPresence(thenFetchBalance: true)
+    }
+
+    public func hasKey(_ providerId: String) -> Bool {
+        return keyPresence[providerId] ?? false
+    }
+
+    public func refreshKeyPresence(thenFetchBalance: Bool = false) {
+        let providerIds = allProviders.filter { $0.requiresApiKey }.map { $0.id }
+        Task { [weak self] in
+            let presence = await Task.detached(priority: .userInitiated) { () -> [String: Bool] in
+                var map: [String: Bool] = [:]
+                for pid in providerIds {
+                    map[pid] = KeychainVault.exists(providerId: pid)
+                }
+                return map
+            }.value
+            await MainActor.run {
+                guard let self else { return }
+                self.keyPresence = presence
+                if thenFetchBalance {
+                    self.fetchBalanceIfNeeded()
+                }
+            }
+        }
     }
 
     public func syncSelectionWithCurrentStatus() {
@@ -78,16 +106,18 @@ public class AppState: ObservableObject {
         }
     }
 
-    public func refreshAll() {
+    public func refreshAll(preserveSelection: Bool = false) {
         self.status = CodexConfigManager.shared.getStatus()
         self.allProviders = ProviderCatalog.shared.getAllProviders()
         self.backups = CodexConfigManager.shared.listBackups()
-        syncSelectionWithCurrentStatus()
-        fetchBalanceIfNeeded()
+        if !preserveSelection {
+            syncSelectionWithCurrentStatus()
+        }
+        refreshKeyPresence(thenFetchBalance: true)
     }
 
     public func fetchBalanceIfNeeded() {
-        if KeychainVault.exists(providerId: "deepseek") {
+        if hasKey("deepseek") {
             isFetchingBalance = true
             Task { @MainActor in
                 let bal = await ConnectionTester.shared.fetchDeepSeekBalance()
@@ -100,6 +130,8 @@ public class AppState: ObservableObject {
     }
 
     public func onProviderChange(_ newProviderId: String) {
+        // 重複選到同一個供應商時不重設模型，避免使用者已選好的模型被清掉
+        guard newProviderId != selectedProviderId else { return }
         selectedProviderId = newProviderId
         if let prov = allProviders.first(where: { $0.id == newProviderId }) {
             if let firstModel = prov.models.first {
@@ -141,9 +173,13 @@ public class AppState: ObservableObject {
         }
 
         // Check key
-        if prov.requiresApiKey && !KeychainVault.exists(providerId: prov.id) {
+        if prov.requiresApiKey && !hasKey(prov.id) {
             keyPromptProviderId = prov.id
             keyPromptInput = ""
+            // 金鑰儲存成功後自動接續切換流程，使用者不必再按一次「立即套用設定」
+            pendingSwitchAction = { [weak self] in
+                self?.performSwitch()
+            }
             showKeyPrompt = true
             return
         }
@@ -161,83 +197,129 @@ public class AppState: ObservableObject {
     }
 
     public func executeApplySwitch(provider: ProviderOption, model: ModelOption) {
+        guard !isOperating else { return }
         isOperating = true
         operationMessage = "正在套用模型與思考強度設定..."
-        do {
-            try CodexConfigManager.shared.applySwitch(
-                provider: provider,
-                model: model,
-                reasoningEffort: selectedReasoningEffort == "-" ? nil : selectedReasoningEffort
-            )
-            refreshAll()
-            isOperating = false
-            let effortText = (selectedReasoningEffort != "-" && !selectedReasoningEffort.isEmpty) ? "（思考強度：\(selectedReasoningEffort)）" : ""
-            showSuccess(title: "設定已套用", message: "已安全套用 \(provider.displayName) / \(model.displayName) \(effortText)。\n請重新開啟 Codex 以生效。")
-        } catch {
-            isOperating = false
-            showError(title: "套用失敗", message: error.localizedDescription)
+        let effort: String? = (selectedReasoningEffort == "-" || selectedReasoningEffort.isEmpty) ? nil : selectedReasoningEffort
+        Task { @MainActor in
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    try CodexConfigManager.shared.applySwitch(
+                        provider: provider,
+                        model: model,
+                        reasoningEffort: effort
+                    )
+                }.value
+                self.refreshAll()
+                self.isOperating = false
+                let effortText = effort.map { "（思考強度：\($0)）" } ?? ""
+                self.showSuccess(title: "設定已套用", message: "已安全套用 \(provider.displayName) / \(model.displayName) \(effortText)。\n請重新開啟 Codex 以生效。")
+            } catch {
+                self.isOperating = false
+                self.showError(title: "套用失敗", message: error.localizedDescription)
+            }
         }
     }
 
     public func performOpenAISwitch() {
+        guard !isOperating else { return }
         isOperating = true
         operationMessage = "正在切回 OpenAI 原生設定..."
-        do {
-            try CodexConfigManager.shared.applyOpenAI()
-            refreshAll()
-            isOperating = false
-            showSuccess(title: "還原成功", message: "已切回 OpenAI 原生設定。現在可以重新開啟 Codex。")
-        } catch {
-            isOperating = false
-            showError(title: "還原失敗", message: error.localizedDescription)
+        Task { @MainActor in
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    try CodexConfigManager.shared.applyOpenAI()
+                }.value
+                self.refreshAll()
+                self.isOperating = false
+                self.showSuccess(title: "還原成功", message: "已切回 OpenAI 原生設定。現在可以重新開啟 Codex。")
+            } catch {
+                self.isOperating = false
+                self.showError(title: "還原失敗", message: error.localizedDescription)
+            }
         }
     }
 
     public func performRestoreOriginal() {
+        guard !isOperating else { return }
         isOperating = true
         operationMessage = "正在恢復首次備份..."
-        do {
-            try CodexConfigManager.shared.restoreOriginalBackup()
-            refreshAll()
-            isOperating = false
-            showSuccess(title: "恢復成功", message: "已恢復為首次切換前的原始 Codex 設定。請重新開啟 Codex。")
-        } catch {
-            isOperating = false
-            showError(title: "恢復失敗", message: error.localizedDescription)
+        Task { @MainActor in
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    try CodexConfigManager.shared.restoreOriginalBackup()
+                }.value
+                self.refreshAll()
+                self.isOperating = false
+                self.showSuccess(title: "恢復成功", message: "已恢復為首次切換前的原始 Codex 設定。請重新開啟 Codex。")
+            } catch {
+                self.isOperating = false
+                self.showError(title: "恢復失敗", message: error.localizedDescription)
+            }
         }
     }
 
     public func performRestoreSnapshot(path: String) {
+        guard !isOperating else { return }
         isOperating = true
         operationMessage = "正在恢復備份快照..."
-        do {
-            try CodexConfigManager.shared.restoreSpecificBackup(at: path)
-            refreshAll()
-            isOperating = false
-            showSuccess(title: "恢復成功", message: "已恢復選取的備份快照。請重新開啟 Codex。")
-        } catch {
-            isOperating = false
-            showError(title: "恢復失敗", message: error.localizedDescription)
+        Task { @MainActor in
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    try CodexConfigManager.shared.restoreSpecificBackup(at: path)
+                }.value
+                self.refreshAll()
+                self.isOperating = false
+                self.showSuccess(title: "恢復成功", message: "已恢復選取的備份快照。請重新開啟 Codex。")
+            } catch {
+                self.isOperating = false
+                self.showError(title: "恢復失敗", message: error.localizedDescription)
+            }
         }
     }
 
     public func saveKey(providerId: String, key: String) {
-        let res = KeychainVault.saveKey(providerId: providerId, secret: key)
-        if res.success {
-            refreshAll()
-            showSuccess(title: "金鑰已儲存", message: "已安全儲存 \(providerId) 的金鑰至 macOS 鑰匙圈。")
-        } else {
-            showError(title: "儲存失敗", message: res.message)
+        guard !isOperating else { return }
+        isOperating = true
+        operationMessage = "正在儲存金鑰至鑰匙圈..."
+        Task { @MainActor in
+            let res = await Task.detached(priority: .userInitiated) {
+                KeychainVault.saveKey(providerId: providerId, secret: key)
+            }.value
+            self.isOperating = false
+            if res.success {
+                self.keyPresence[providerId] = true
+                // 保留使用者已選好的目標供應商與模型，儲存金鑰後才能無縫接續切換
+                self.refreshAll(preserveSelection: true)
+                if let continueSwitch = self.pendingSwitchAction {
+                    self.pendingSwitchAction = nil
+                    continueSwitch()
+                } else {
+                    self.showSuccess(title: "金鑰已儲存", message: "已安全儲存 \(providerId) 的金鑰至 macOS 鑰匙圈。")
+                }
+            } else {
+                self.pendingSwitchAction = nil
+                self.showError(title: "儲存失敗", message: res.message)
+            }
         }
     }
 
     public func deleteKey(providerId: String) {
-        let res = KeychainVault.deleteKey(providerId: providerId)
-        if res.success {
-            refreshAll()
-            showSuccess(title: "金鑰已刪除", message: "已從 macOS 鑰匙圈刪除 \(providerId) 的金鑰。")
-        } else {
-            showError(title: "刪除失敗", message: res.message)
+        guard !isOperating else { return }
+        isOperating = true
+        operationMessage = "正在刪除鑰匙圈金鑰..."
+        Task { @MainActor in
+            let res = await Task.detached(priority: .userInitiated) {
+                KeychainVault.deleteKey(providerId: providerId)
+            }.value
+            self.isOperating = false
+            if res.success {
+                self.keyPresence[providerId] = false
+                self.refreshAll(preserveSelection: true)
+                self.showSuccess(title: "金鑰已刪除", message: "已從 macOS 鑰匙圈刪除 \(providerId) 的金鑰。")
+            } else {
+                self.showError(title: "刪除失敗", message: res.message)
+            }
         }
     }
 
@@ -560,7 +642,6 @@ struct SwitcherTabView: View {
                             }
                         }
                         .pickerStyle(.menu)
-                        .id("prov-picker-\(state.selectedProviderId)")
                     }
 
                     // Model Picker
@@ -580,7 +661,6 @@ struct SwitcherTabView: View {
                                 }
                             }
                             .pickerStyle(.menu)
-                            .id("model-picker-\(state.selectedProviderId)-\(state.selectedModelId)")
                         }
 
                         // Reasoning Effort if applicable
@@ -602,7 +682,6 @@ struct SwitcherTabView: View {
                                     }
                                 }
                                 .pickerStyle(.menu)
-                                .id("effort-picker-\(state.selectedModelId)-\(state.selectedReasoningEffort)")
                             }
                         }
 
@@ -613,7 +692,7 @@ struct SwitcherTabView: View {
                                     .font(.system(size: 12))
                                     .foregroundColor(.secondary)
                                     .frame(width: 100, alignment: .leading)
-                                if KeychainVault.exists(providerId: curProv.id) {
+                                if state.hasKey(curProv.id) {
                                     HStack(spacing: 4) {
                                         Image(systemName: "checkmark.seal.fill")
                                             .foregroundColor(.green)
@@ -640,18 +719,29 @@ struct SwitcherTabView: View {
                 // Action Buttons
                 HStack(spacing: 14) {
                     Button(action: { state.performSwitch() }) {
-                        Label("立即套用設定", systemImage: "checkmark.circle.fill")
-                            .font(.system(size: 13.5, weight: .semibold))
+                        if state.isOperating {
+                            HStack(spacing: 8) {
+                                ProgressView().controlSize(.small)
+                                Text(state.operationMessage.isEmpty ? "處理中..." : state.operationMessage)
+                                    .font(.system(size: 13, weight: .semibold))
+                            }
                             .frame(minWidth: 140)
+                        } else {
+                            Label("立即套用設定", systemImage: "checkmark.circle.fill")
+                                .font(.system(size: 13.5, weight: .semibold))
+                                .frame(minWidth: 140)
+                        }
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
+                    .disabled(state.isOperating)
 
                     Button(action: { state.performOpenAISwitch() }) {
                         Label("切回 OpenAI 原生設定", systemImage: "arrow.uturn.backward")
                             .font(.system(size: 13, weight: .regular))
                     }
                     .controlSize(.large)
+                    .disabled(state.isOperating)
 
                     Spacer()
                 }
@@ -689,7 +779,7 @@ struct KeysTabView: View {
 
             VStack(spacing: 12) {
                 ForEach(state.allProviders.filter { $0.requiresApiKey }) { prov in
-                    let hasKey = KeychainVault.exists(providerId: prov.id)
+                    let hasKey = state.hasKey(prov.id)
                     VStack(alignment: .leading, spacing: 10) {
                         HStack {
                             VStack(alignment: .leading, spacing: 2) {
@@ -727,6 +817,7 @@ struct KeysTabView: View {
                                     Button("更換金鑰") {
                                         state.keyPromptProviderId = prov.id
                                         state.keyPromptInput = ""
+                                        state.pendingSwitchAction = nil
                                         state.showKeyPrompt = true
                                     }
                                     .controlSize(.small)
@@ -748,6 +839,7 @@ struct KeysTabView: View {
                                     Button("設定金鑰") {
                                         state.keyPromptProviderId = prov.id
                                         state.keyPromptInput = ""
+                                        state.pendingSwitchAction = nil
                                         state.showKeyPrompt = true
                                     }
                                     .buttonStyle(.borderedProminent)
@@ -924,7 +1016,7 @@ struct BackupsTabView: View {
                     Label("恢復首次原始備份", systemImage: "arrow.counterclockwise")
                 }
                 .controlSize(.regular)
-                .disabled(!state.status.originalBackupExists)
+                .disabled(!state.status.originalBackupExists || state.isOperating)
 
                 Button(action: {
                     NSWorkspace.shared.open(CodexConfigManager.shared.backupDir)
@@ -969,6 +1061,7 @@ struct BackupsTabView: View {
                                     state.performRestoreSnapshot(path: item.path)
                                 }
                                 .controlSize(.small)
+                                .disabled(state.isOperating)
                             }
                             .padding(10)
                             .background(Color(NSColor.controlBackgroundColor))
@@ -1062,6 +1155,7 @@ struct KeyPromptSheet: View {
             HStack {
                 Button("取消") {
                     state.showKeyPrompt = false
+                    state.pendingSwitchAction = nil
                 }
                 .keyboardShortcut(.cancelAction)
 
