@@ -45,10 +45,31 @@ cd mac
 - 在 Finder 中直接 **雙擊「Codex Model Switcher.app」** 即可開啟。
 - 也可將其拖曳至 `/Applications`（應用程式）資料夾中使用。
 
-> **首次開啟提醒**：  
-> 若 macOS 顯示安全性提示（因本工具為開源分享、未購買 Apple 付費開發者證書），請至 **「系統設定」→「隱私權與安全性」** 點擊 **「仍要打開」**，或在 App 上按住 `Control` 鍵點擊「打開」。
-
 ---
+
+## 首次開啟安全性提示排除（Gatekeeper 機制）
+
+由於本工具為開源分享，尚未購買 Apple 付費開發者簽章憑證（Developer ID），macOS 在首次開啟從網路下載的 App 時會彈出「**Apple無法驗證 Codex Model Switcher.app 是否為惡意軟體**」的防護提示。
+
+這是 macOS 對未簽章開源軟體的預期防護行為，請依下列方式之一排除（**只需操作一次，後續即可直接雙擊開啟**）：
+
+### 方法一：Control + 滑鼠右鍵開啟（最推薦，無需指令）
+1. 在 Finder 中按住鍵盤 **`Control`（⌃）** 鍵，同時用滑鼠點擊 **`Codex Model Switcher.app`**（即按右鍵）。
+2. 在彈出的右鍵選單中點選 **「打開」**。
+3. 此時跳出的對話框會出現 **「打開」** 或 **「仍要打開」** 按鈕，點擊即可正常啟動。
+
+### 方法二：由系統設定放行
+1. 點擊 Mac 畫面左上角  選單 → 打開 **「系統設定」**。
+2. 點選左側 **「隱私權與安全性」**。
+3. 往下滑動至 **「安全性」** 區域，會看見提示「已阻擋開啟 Codex Model Switcher.app...」。
+4. 點擊旁邊的 **「強制打開」**（Open Anyway）並輸入 Mac 解鎖密碼即可。
+
+### 方法三：終端機一鍵清除隔離標籤
+打開「終端機」（Terminal），貼上並執行以下指令：
+```bash
+xattr -cr "/Applications/Codex Model Switcher.app"
+```
+*(若檔案位於「下載」資料夾，路徑請改為 `xattr -cr ~/Downloads/"Codex Model Switcher.app"`)*
 
 ## 操作指南
 
