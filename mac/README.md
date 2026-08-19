@@ -1,80 +1,81 @@
-# Codex 多模型切換器 macOS 版（終端機原型）
+# Codex 多模型切換器 macOS 原生圖形介面版（.app）
 
-> **這是原型測試版**，功能與 Windows 版相同（切換、備份、還原、金鑰保管），但操作方式是**終端機文字選單**，不是圖形視窗。
->
-> **為什麼 Mac 版長這樣？** macOS 對沒有 Apple 簽章與公證的圖形程式會直接顯示「已損毀」並阻止執行，簽章需要每年付費的開發者帳號。改用終端機腳本＋`git clone` 取得，就完全沒有這個問題，工具可以永久免費分享。
+這是專為 macOS 打造的 **原生圖形介面（GUI）應用程式**，採用 **Swift / SwiftUI** 現代化架構開發，編譯為單一標準 `.app` 應用程式包（`Codex Model Switcher.app`），雙擊即可開啟直覺操作視窗。
 
 ---
 
-## 開始之前
+## 主要特色
 
-- macOS 12（Monterey）或更新版本
-- 已安裝 Codex，而且**至少成功啟動過一次**
-- 需要自備 DeepSeek 或 MiniMax 的 API Key（申請方式見[新手完整教學](../docs/新手教學.md)的步驟 3，費用自付）
+- **純原生 macOS 圖形介面**：使用 SwiftUI 打造現代化視覺效果，支援深色/淺色模式、原生選單、快速鍵與高解析度 Retina 圖示。
+- **安全鑰匙圈保管（Keychain）**：API Key 儲存於 macOS 系統鑰匙圈（`CodexModelSwitcher/provider/<供應商>`），不寫入任何設定檔或專案檔案中。
+- **雙模運作架構**：
+  - **雙擊開啟**：啟動直觀的原生圖形視窗，輕鬆切換模型、管理金鑰與查詢 DeepSeek 帳戶餘額。
+  - **Codex 即時授權**：Codex 執行時自動呼叫 `CodexModelSwitcher token <供應商>` 即時取得金鑰，零等待、不落地。
+- **完整安全防護與備份**：
+  - 首次切換前永久備份原始設定（`~/.codex/model-switcher/backups/original-config.toml`）。
+  - 自動保留最近 5 份切換快照，可隨時一鍵還原。
+  - 採用原子寫入與寫入前校驗，設定失敗時自動回滾。
+- **相容 OpenAI Responses API 自訂供應商**：除預設的 DeepSeek 與 MiniMax 外，可自由新增相容供應商。
 
-## 安裝（只需做一次）
+---
 
-打開「終端機」（Terminal，可用 Spotlight 搜尋 ⌘+空白鍵 → 輸入 Terminal），逐行貼上：
+## 系統需求
+
+- macOS 12（Monterey）或更新版本（支援 Apple Silicon M 系列及 Intel Mac）
+- 已安裝 Codex，且至少成功啟動過一次
+- 具備目標供應商之 API Key（如 DeepSeek 或 MiniMax）
+
+---
+
+## 快速使用
+
+### 1. 一鍵建置（若從原始碼建置）
+
+在專案目錄下執行建置腳本：
 
 ```bash
-git clone https://github.com/zellhuang0503/Codex-Model-Switcher.git
+cd mac
+./build-app.sh
 ```
 
-> 第一次用 `git` 時，macOS 可能跳出「需要安裝命令列開發者工具」——按「安裝」等它跑完（免費，約幾分鐘），再執行一次上面的指令。
+建置完成後將在 `mac/` 目錄生成 **`Codex Model Switcher.app`**。
 
-## 每次使用
+### 2. 開啟應用程式
 
-```bash
-cd Codex-Model-Switcher/mac
-./codex-switch.sh
-```
+- 在 Finder 中直接 **雙擊「Codex Model Switcher.app」** 即可開啟。
+- 也可將其拖曳至 `/Applications`（應用程式）資料夾中使用。
 
-會出現文字選單：
+> **首次開啟提醒**：  
+> 若 macOS 顯示安全性提示（因本工具為開源分享、未購買 Apple 付費開發者證書），請至 **「系統設定」→「隱私權與安全性」** 點擊 **「仍要打開」**，或在 App 上按住 `Control` 鍵點擊「打開」。
 
-```
-1) 查看目前狀態
-2) 切換模型
-3) 設定／管理 API Key
-4) 測試連線
-5) 恢復原始設定
-6) 離開
-```
+---
 
-**建議的首次流程**：`3` 設定 API Key →（貼上金鑰，畫面不會顯示，貼完按 Enter）→ `4` 測試連線 → 關閉 Codex → `2` 切換模型 → 重新開啟 Codex。
+## 操作指南
 
-## 你的金鑰放在哪裡
+### 1. 設定 API Key
+- 切換至 **「金鑰管理」** 分頁。
+- 點擊對應供應商（如 DeepSeek、MiniMax）的 **「設定金鑰」** 或 **「更換金鑰」**。
+- 貼上您的 API Key 並儲存，金鑰將直接加密存入 macOS 鑰匙圈。
+- DeepSeek 支援點擊 **「重新查詢」** 即時顯示帳戶剩餘餘額。
 
-- 保存在 macOS 內建的**鑰匙圈（Keychain）**，項目名稱為 `CodexModelSwitcher/provider/<供應商>`。
-- **不會**寫進 Codex 設定檔、**不會**放在這個資料夾裡；把資料夾分享給別人不會帶走你的金鑰。
-- 想親眼確認或手動刪除：打開內建的「鑰匙圈存取」App 搜尋 `CodexModelSwitcher`。
-- Codex 需要金鑰時，會執行 `codex-switch.sh token <供應商>` 即時取用，金鑰不落地。
+### 2. 切換模型
+- 切換至 **「模型切換」** 分頁。
+- 選擇目標供應商與模型（如 DeepSeek V4 Flash / Pro、MiniMax M3 等）。
+- 點擊 **「立即切換模型」**。
+- 關閉並重新啟動 Codex，模型即切換完成（Codex 介面顯示「自訂」為正常現象）。
 
-## 注意事項
+### 3. 切回 OpenAI 原生設定
+- 在「模型切換」分頁點擊 **「切回 OpenAI 原生設定」**，系統將解碼還原最初的 OpenAI 設定。
 
-- **資料夾位置不要搬動**：切換時腳本會把自己的路徑寫進 Codex 設定。要搬移前先執行選單 `5` 恢復原始設定，搬完重新切換一次即可。
-- 切換前請**自行關閉 Codex**（腳本會檢查並提醒，不會強制關閉）。
-- 切換後 Codex 模型選單顯示「**自訂**」是正常現象；到供應商用量頁核對 token 數即可確認生效。
-- 每次切換前會自動備份：首次原始設定永久保留，另保留最近五份（位於 `~/.codex/model-switcher/backups/`）。
+### 4. 連線測試與備份還原
+- **連線測試**：在「連線測試」分頁發送極少量探針（16 token），確認網路、金鑰與端點相容性。
+- **備份管理**：在「備份與歷史」分頁可隨時還原首次原始備份或指定歷史快照，並可一鍵在 Finder 開啟設定資料夾。
+
+---
 
 ## 完全移除
 
-1. 執行 `./codex-switch.sh` → 選 `5` 恢復原始設定
-2. 選 `3` 刪除各供應商金鑰（或在「鑰匙圈存取」刪除 `CodexModelSwitcher` 開頭的項目）
-3. 刪除 `Codex-Model-Switcher` 資料夾
-4. （選用）刪除 `~/.codex/model-switcher/` 備份資料夾
-
-## 原型版與 Windows 版的差異
-
-| 項目 | Windows 0.9.0 | macOS 原型 |
-| --- | --- | --- |
-| 操作介面 | 圖形視窗 | 終端機選單 |
-| 切換／備份／還原／金鑰保管 | ✅ | ✅（協定相同） |
-| 連線測試 | ✅ | ✅（僅文字測試，未含工具呼叫驗證） |
-| 自訂供應商 | ✅ | ❌ 尚未支援 |
-| 供應商目錄 | `providers.json` | 內建於腳本（內容相同） |
-
-設定檔標記格式與 Windows 版完全相同，同一份 `config.toml` 由哪一版切換、由哪一版還原都可以。
-
-## 問題回報
-
-到 [Issues](../../../issues) 回報時請附上：macOS 版本、畫面上的錯誤訊息文字。**請勿貼上 API Key 或含金鑰的截圖。**
+1. 開啟 `Codex Model Switcher.app` → 「備份與歷史」分頁 → 點擊 **「恢復首次原始備份」**。
+2. 至「金鑰管理」分頁刪除各供應商金鑰（或在內建「鑰匙圈存取」App 搜尋並刪除 `CodexModelSwitcher`）。
+3. 刪除 `Codex Model Switcher.app` 應用程式。
+4. （選用）刪除 `~/.codex/model-switcher/` 備份資料夾。

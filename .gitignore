@@ -20,7 +20,8 @@ release/
 *.credentials
 credentials/
 
-# 作業系統暫存檔
+# 作業系統暫存檔與應用程式打包
 Thumbs.db
 Desktop.ini
 .DS_Store
+*.app/
