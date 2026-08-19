@@ -46,6 +46,20 @@ say()  { printf '%s\n' "$1"; }
 err()  { printf '%s\n' "$1" >&2; }
 line() { printf '%s\n' "----------------------------------------"; }
 
+SELECTED_INDEX=0
+cleanup_terminal() {
+    [ -t 2 ] && printf '\033[?25h' >&2 2>/dev/null || true
+}
+
+on_interrupt() {
+    cleanup_terminal
+    rmdir "$LOCK_DIR" 2>/dev/null || true
+    printf '\n已退出。\n' >&2
+    exit 130
+}
+trap cleanup_terminal EXIT
+trap on_interrupt INT TERM
+
 # ---------------------------------------------------------------------------
 # 鑰匙圈（等同 Windows 版的 CredentialVault）
 # ---------------------------------------------------------------------------
@@ -88,6 +102,7 @@ key_delete() {
 # token 子命令：Codex 透過它取得金鑰（行為與 Windows 版 Program.cs 相同）
 # ---------------------------------------------------------------------------
 cmd_token() {
+    trap - EXIT INT TERM
     if [ $# -ne 1 ] || ! validate_provider_id "$1"; then
         err "無法辨識命令。"
         exit 2
@@ -191,12 +206,14 @@ acquire_lock() {
         err "另一個切換器正在修改設定，請稍後再試。"
         return 1
     fi
-    trap 'rmdir "$LOCK_DIR" 2>/dev/null' EXIT INT TERM
+    trap 'rmdir "$LOCK_DIR" 2>/dev/null; cleanup_terminal' EXIT
+    trap on_interrupt INT TERM
 }
 
 release_lock() {
     rmdir "$LOCK_DIR" 2>/dev/null
-    trap - EXIT INT TERM
+    trap cleanup_terminal EXIT
+    trap on_interrupt INT TERM
 }
 
 # ---------------------------------------------------------------------------
@@ -452,20 +469,37 @@ run_connection_test() {
         say "尚未設定 $provider_id 的 API Key，請先從選單設定。"
         return 1
     fi
-    printf '測試會送出一段固定文字（上限 16 個輸出 token），可能產生極少量 API 費用。繼續嗎？(y/N)：'
+    printf '測試會送出一段固定文字（上限 16 個輸出 token），可能產生極少量 API 費用。繼續嗎？(Y/n)：'
     read -r go
-    case "$go" in (y|Y) ;; (*) say "已取消。"; return 0 ;; esac
+    case "$go" in (n|N) say "已取消。"; return 0 ;; (*) ;; esac
 
-    secret="$(key_read "$provider_id")"
-    status=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 \
+    secret="$("$SCRIPT_PATH" token "$provider_id" 2>/dev/null)" || {
+        say "無法透過 token 命令取得 $provider_id 的 API Key，請重新設定。"
+        return 1
+    }
+
+    local resp_file
+    resp_file="$(mktemp "${SWITCHER_DIR:-/tmp}/test-resp.XXXXXX")"
+    status=$(curl -sS -o "$resp_file" -w '%{http_code}' --max-time 30 \
         -H "Authorization: Bearer $secret" \
         -H "Content-Type: application/json" \
+        -H "Accept: application/json" \
         -d "{\"model\":\"$model_id\",\"input\":\"Reply with exactly OK.\",\"max_output_tokens\":16,\"stream\":false}" \
         "$base_url/responses" 2>/dev/null) || status=000
     secret=""
     if [ "$status" = "200" ]; then
-        say "連線測試成功：金鑰、模型與 Responses API 均可正常使用。"
+        if grep -q '"object"[[:space:]]*:[[:space:]]*"response"' "$resp_file" 2>/dev/null; then
+            say "連線測試成功：金鑰、模型與 Responses API 均可正常使用。"
+            rm -f "$resp_file"
+            return 0
+        else
+            say "連線測試未完全通過：供應商回傳 HTTP 200，但內容非標準 Responses API 格式。"
+            say "診斷摘要：供應商=${provider_id}；模型=${model_id}；HTTP=$status（非標準回應）"
+            rm -f "$resp_file"
+            return 1
+        fi
     else
+        rm -f "$resp_file"
         describe_http_status "$status"
         say "診斷摘要：供應商=${provider_id}；模型=${model_id}；HTTP=$status"
         return 1
@@ -505,27 +539,94 @@ show_status() {
     line
 }
 
+interactive_select() {
+    local title="$1"; shift
+    local options=("$@")
+    local count=${#options[@]}
+    local selected=0
+    local key rest esc
+    esc=$(printf '\033')
+
+    [ "$count" -eq 0 ] && return 1
+
+    printf '\033[?25l' >&2
+
+    if [ -n "$title" ]; then
+        printf '%s\n' "$title"
+    fi
+    printf '\033[90m（使用 ↑/↓ 移動，Enter 確定，數字鍵直選，Esc 取消）\033[0m\n'
+
+    render_options() {
+        local i
+        for i in "${!options[@]}"; do
+            if [ "$i" -eq "$selected" ]; then
+                printf '\033[2K\r \033[1;36m❯ %d) %s\033[0m\n' $((i + 1)) "${options[$i]}"
+            else
+                printf '\033[2K\r   %d) %s\n' $((i + 1)) "${options[$i]}"
+            fi
+        done
+    }
+
+    render_options
+
+    while :; do
+        if ! IFS= read -r -s -n1 key; then
+            printf '\033[?25h' >&2
+            SELECTED_INDEX=-1
+            return 1
+        fi
+        if [ "$key" = "$esc" ]; then
+            read -r -s -n2 -t 1 rest 2>/dev/null
+            case "$rest" in
+                "[A"|"OA")
+                    selected=$(( (selected - 1 + count) % count ))
+                    ;;
+                "[B"|"OB")
+                    selected=$(( (selected + 1) % count ))
+                    ;;
+                "")
+                    printf '\033[?25h' >&2
+                    SELECTED_INDEX=-1
+                    return 1
+                    ;;
+            esac
+        elif [ -z "$key" ] || [ "$key" = $'\n' ]; then
+            printf '\033[?25h' >&2
+            SELECTED_INDEX=$selected
+            return 0
+        elif case "$key" in [1-9]) ;; *) false ;; esac; then
+            local num=$((key - 1))
+            if [ "$num" -ge 0 ] && [ "$num" -lt "$count" ]; then
+                printf '\033[?25h' >&2
+                SELECTED_INDEX=$num
+                return 0
+            fi
+        fi
+
+        printf '\033[%dA' "$count"
+        render_options
+    done
+}
+
 pick_target() {
-    say "可切換的目標："
-    i=0
+    local target_opts=()
+    local i=0
     while [ $i -lt $ROW_COUNT ]; do
-        printf '  %d) %s ─ %s\n' $((i + 1)) "${ROW_PROVIDER_NAME[$i]}" "${ROW_MODEL_NAME[$i]}"
+        target_opts+=("${ROW_PROVIDER_NAME[$i]} ─ ${ROW_MODEL_NAME[$i]}")
         i=$((i + 1))
     done
-    printf '請選擇（1-%d，其他鍵取消）：' $ROW_COUNT
-    read -r choice
-    case "$choice" in
-        (*[!0-9]*|"") return 1 ;;
-    esac
-    [ "$choice" -ge 1 ] && [ "$choice" -le $ROW_COUNT ] || return 1
-    TARGET=$((choice - 1))
+    if interactive_select "可切換的目標：" "${target_opts[@]}"; then
+        TARGET=$SELECTED_INDEX
+        return 0
+    else
+        return 1
+    fi
 }
 
 menu_switch() {
     require_config || return 1
     pick_target || { say "已取消。"; return 0; }
     pid="${ROW_PROVIDER_ID[$TARGET]}"
-    require_codex_closed || return 1
 
     if [ "$pid" = "openai" ]; then
         acquire_lock || return 1
@@ -543,10 +644,10 @@ menu_switch() {
     fi
     confirm_data_flow "$pid" || { say "已取消切換。"; return 0; }
 
-    printf '即將切換為：%s ─ %s。切換前會自動備份。確定？(y/N)：' \
+    printf '即將切換為：%s ─ %s。切換前會自動備份。確定？(Y/n)：' \
         "${ROW_PROVIDER_NAME[$TARGET]}" "${ROW_MODEL_NAME[$TARGET]}"
     read -r go
-    case "$go" in (y|Y) ;; (*) say "已取消。"; return 0 ;; esac
+    case "$go" in (n|N) say "已取消。"; return 0 ;; (*) ;; esac
 
     acquire_lock || return 1
     if apply_switch "$pid" "${ROW_PROVIDER_NAME[$TARGET]}" "${ROW_MODEL_ID[$TARGET]}" \
@@ -561,20 +662,29 @@ menu_key_setup() {
     if [ $# -eq 1 ]; then
         pid="$1"
     else
-        printf '要管理哪個供應商的 API Key？（deepseek / minimax）：'
-        read -r pid
+        local pid_opts=("DeepSeek (deepseek)" "MiniMax (minimax)")
+        if ! interactive_select "要管理哪個供應商的 API Key？" "${pid_opts[@]}"; then
+            say "已取消。"
+            return 0
+        fi
+        case "$SELECTED_INDEX" in
+            0) pid="deepseek" ;;
+            1) pid="minimax" ;;
+            *) return 1 ;;
+        esac
     fi
     validate_provider_id "$pid" || { say "供應商識別碼格式不正確。"; return 1; }
     case "$pid" in (deepseek|minimax) ;; (*) say "原型版僅支援 deepseek 與 minimax。"; return 1 ;; esac
 
     if key_exists "$pid"; then
-        say "此供應商已保存金鑰。1) 更換  2) 刪除  3) 取消"
-        printf '請選擇：'
-        read -r act
-        case "$act" in
-            2) key_delete "$pid" && say "已從鑰匙圈刪除 $pid 的 API Key。"; return 0 ;;
-            1) ;;
-            *) return 0 ;;
+        local act_opts=("更換金鑰" "刪除金鑰" "取消返回")
+        if ! interactive_select "供應商【$pid】已保存金鑰，請選擇動作：" "${act_opts[@]}"; then
+            return 0
+        fi
+        case "$SELECTED_INDEX" in
+            1) key_delete "$pid" && say "已從鑰匙圈刪除 $pid 的 API Key。"; return 0 ;;
+            0) ;; # 更換
+            *) return 0 ;; # 取消
         esac
     fi
     printf '請貼上 %s 的 API Key（輸入時不顯示）：' "$pid"
@@ -605,10 +715,9 @@ menu_restore() {
         say "找不到首次切換前的原始設定備份（尚未執行過切換）。"
         return 1
     fi
-    require_codex_closed || return 1
-    printf '將恢復為 %s 的原始設定。確定？(y/N)：' "$(date -r "$ORIGINAL_BACKUP" '+%Y-%m-%d %H:%M')"
+    printf '將恢復為 %s 的原始設定。確定？(Y/n)：' "$(date -r "$ORIGINAL_BACKUP" '+%Y-%m-%d %H:%M')"
     read -r go
-    case "$go" in (y|Y) ;; (*) say "已取消。"; return 0 ;; esac
+    case "$go" in (n|N) say "已取消。"; return 0 ;; esac
     acquire_lock || return 1
     backup_before_write
     cp "$ORIGINAL_BACKUP" "$CONFIG_PATH"
@@ -619,24 +728,27 @@ menu_restore() {
 
 main_menu() {
     say "Codex 多模型切換器 macOS 版（原型 ${VERSION}）"
+    local main_opts=(
+        "查看目前狀態"
+        "切換模型"
+        "設定／管理 API Key"
+        "測試連線"
+        "恢復原始設定"
+        "離開"
+    )
     while :; do
         line
-        say "1) 查看目前狀態"
-        say "2) 切換模型"
-        say "3) 設定／管理 API Key"
-        say "4) 測試連線"
-        say "5) 恢復原始設定"
-        say "6) 離開"
-        printf '請選擇：'
-        read -r pick
-        case "$pick" in
-            1) show_status ;;
-            2) menu_switch ;;
-            3) menu_key_setup ;;
-            4) menu_test ;;
-            5) menu_restore ;;
-            6|q) exit 0 ;;
-            *) say "請輸入 1-6。" ;;
+        if ! interactive_select "請選擇功能：" "${main_opts[@]}"; then
+            say "感謝使用，已退出。"
+            exit 0
+        fi
+        case "$SELECTED_INDEX" in
+            0) show_status ;;
+            1) menu_switch ;;
+            2) menu_key_setup ;;
+            3) menu_test ;;
+            4) menu_restore ;;
+            5) say "感謝使用，已退出。"; exit 0 ;;
         esac
     done
 }
