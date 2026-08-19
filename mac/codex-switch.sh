@@ -67,7 +67,7 @@ key_read() {
 key_save() {
     provider_id="$1" secret="$2"
     if [ -z "$secret" ] || [ ${#secret} -gt $MAX_KEY_LENGTH ]; then
-        err "API Key 格式不正確（不可空白、長度上限 $MAX_KEY_LENGTH）。"
+        err "API Key 格式不正確（不可空白、長度上限 ${MAX_KEY_LENGTH}）。"
         return 1
     fi
     case "$secret" in
@@ -108,7 +108,7 @@ b64dec() { printf '%s\n' "$1" | openssl base64 -d 2>/dev/null; }
 # ---------------------------------------------------------------------------
 require_config() {
     if [ ! -f "$CONFIG_PATH" ]; then
-        err "找不到 Codex 設定檔（$CONFIG_PATH）。請先完整啟動一次 Codex。"
+        err "找不到 Codex 設定檔（${CONFIG_PATH}）。請先完整啟動一次 Codex。"
         return 1
     fi
     size=$(wc -c < "$CONFIG_PATH" | tr -d ' ')
@@ -467,7 +467,7 @@ run_connection_test() {
         say "連線測試成功：金鑰、模型與 Responses API 均可正常使用。"
     else
         describe_http_status "$status"
-        say "診斷摘要：供應商=$provider_id；模型=$model_id；HTTP=$status"
+        say "診斷摘要：供應商=${provider_id}；模型=${model_id}；HTTP=$status"
         return 1
     fi
 }
@@ -478,7 +478,7 @@ run_connection_test() {
 show_status() {
     line
     if [ ! -f "$CONFIG_PATH" ]; then
-        say "尚未找到 Codex 設定（$CONFIG_PATH）。請先啟動一次 Codex。"
+        say "尚未找到 Codex 設定（${CONFIG_PATH}）。請先啟動一次 Codex。"
         return
     fi
     provider="$(root_value "$CONFIG_PATH" model_provider)"
@@ -497,9 +497,9 @@ show_status() {
     fi
     for pid in deepseek minimax; do
         if key_exists "$pid"; then
-            say "API Key（$pid）：已安全保存於鑰匙圈"
+            say "API Key（${pid}）：已安全保存於鑰匙圈"
         else
-            say "API Key（$pid）：尚未設定"
+            say "API Key（${pid}）：尚未設定"
         fi
     done
     line
@@ -618,7 +618,7 @@ menu_restore() {
 }
 
 main_menu() {
-    say "Codex 多模型切換器 macOS 版（原型 $VERSION）"
+    say "Codex 多模型切換器 macOS 版（原型 ${VERSION}）"
     while :; do
         line
         say "1) 查看目前狀態"
