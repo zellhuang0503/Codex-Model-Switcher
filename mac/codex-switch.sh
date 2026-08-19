@@ -494,7 +494,7 @@ run_connection_test() {
             return 0
         else
             say "連線測試未完全通過：供應商回傳 HTTP 200，但內容非標準 Responses API 格式。"
-            say "診斷摘要：供應商=${provider_id}；模型=${model_id}；HTTP=$status（非標準回應）"
+            say "診斷摘要：供應商=${provider_id}；模型=${model_id}；HTTP=${status}（非標準回應）"
             rm -f "$resp_file"
             return 1
         fi
@@ -504,6 +504,41 @@ run_connection_test() {
         say "診斷摘要：供應商=${provider_id}；模型=${model_id}；HTTP=$status"
         return 1
     fi
+}
+
+# ---------------------------------------------------------------------------
+# 餘額查詢（DeepSeek 原生支援 /user/balance）
+# ---------------------------------------------------------------------------
+fetch_deepseek_balance() {
+    local secret resp
+    secret="$(key_read "deepseek" 2>/dev/null)" || return 1
+    [ -z "$secret" ] && return 1
+    resp=$(curl -sS -m 5 -H "Authorization: Bearer $secret" -H "Accept: application/json" https://api.deepseek.com/user/balance 2>/dev/null) || return 1
+    secret=""
+    awk '
+        BEGIN { RS="[{}]"; is_avail="true" }
+        /"is_available"[[:space:]]*:[[:space:]]*false/ { is_avail="false" }
+        /"currency"/ {
+            curr=""; total=""
+            n = split($0, arr, ",")
+            for (i=1; i<=n; i++) {
+                item = arr[i]
+                if (item ~ /"currency"/) { gsub(/.*"currency"[[:space:]]*:[[:space:]]*"|"[^"]*$/, "", item); curr=item }
+                if (item ~ /"total_balance"/) { gsub(/.*"total_balance"[[:space:]]*:[[:space:]]*"|"[^"]*$/, "", item); total=item }
+            }
+            if (total != "" && curr != "") {
+                if (balances != "") balances = balances ", "
+                balances = balances total " " curr
+            }
+        }
+        END {
+            if (is_avail == "false") {
+                print "餘額不足或已停用"
+            } else if (balances != "") {
+                print balances
+            }
+        }
+    ' <<< "$resp"
 }
 
 # ---------------------------------------------------------------------------
@@ -531,7 +566,16 @@ show_status() {
     fi
     for pid in deepseek minimax; do
         if key_exists "$pid"; then
-            say "API Key（${pid}）：已安全保存於鑰匙圈"
+            if [ "$pid" = "deepseek" ]; then
+                bal="$(fetch_deepseek_balance 2>/dev/null)"
+                if [ -n "$bal" ]; then
+                    say "API Key（${pid}）：已保存於鑰匙圈（餘額：${bal}）"
+                else
+                    say "API Key（${pid}）：已保存於鑰匙圈"
+                fi
+            else
+                say "API Key（${pid}）：已保存於鑰匙圈（餘額請至 platform.minimax.io 查詢）"
+            fi
         else
             say "API Key（${pid}）：尚未設定"
         fi
@@ -677,8 +721,13 @@ menu_key_setup() {
     case "$pid" in (deepseek|minimax) ;; (*) say "原型版僅支援 deepseek 與 minimax。"; return 1 ;; esac
 
     if key_exists "$pid"; then
+        local bal_info=""
+        if [ "$pid" = "deepseek" ]; then
+            bal="$(fetch_deepseek_balance 2>/dev/null)"
+            [ -n "$bal" ] && bal_info="（目前餘額：${bal}）"
+        fi
         local act_opts=("更換金鑰" "刪除金鑰" "取消返回")
-        if ! interactive_select "供應商【$pid】已保存金鑰，請選擇動作：" "${act_opts[@]}"; then
+        if ! interactive_select "供應商【${pid}】已保存金鑰${bal_info}，請選擇動作：" "${act_opts[@]}"; then
             return 0
         fi
         case "$SELECTED_INDEX" in
@@ -691,7 +740,16 @@ menu_key_setup() {
     read -r -s new_key
     printf '\n'
     if key_save "$pid" "$new_key"; then
-        say "已將 $pid 的 API Key 安全保存至 macOS 鑰匙圈。"
+        if [ "$pid" = "deepseek" ]; then
+            bal="$(fetch_deepseek_balance 2>/dev/null)"
+            if [ -n "$bal" ]; then
+                say "已將 $pid 的 API Key 安全保存至 macOS 鑰匙圈（帳戶餘額：${bal}）。"
+            else
+                say "已將 $pid 的 API Key 安全保存至 macOS 鑰匙圈。"
+            fi
+        else
+            say "已將 $pid 的 API Key 安全保存至 macOS 鑰匙圈。"
+        fi
     else
         say "保存失敗，金鑰未寫入。"
         return 1
