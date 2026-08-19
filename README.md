@@ -14,6 +14,7 @@ Codex Model Switcher 是一個 Windows 可攜版工具，讓使用者在單一�
 | `使用說明.html`（ZIP 內） | 已下載的使用者 | 離線版說明書，用瀏覽器打開即可 |
 | [MVP 設計文件](docs/superpowers/specs/2026-08-14-windows-portable-mvp-design.md) | 開發者 | 架構、安全設計與驗收標準 |
 | [發佈流程](docs/發佈流程.md) | 維護者 | 打包 ZIP 與發佈 GitHub Release 的逐步步驟 |
+| [macOS 版說明](mac/README.md) | **Mac 使用者** | 終端機原型版的安裝與使用步驟 |
 | [SECURITY.md](SECURITY.md) | 資安回報者 | 安全問題回報方式 |
 
 ## 下載與開始使用
